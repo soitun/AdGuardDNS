@@ -16,6 +16,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/remotekv"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/ioutil"
+	"github.com/AdguardTeam/golibs/requestid"
 	"github.com/AdguardTeam/golibs/timeutil"
 	"github.com/c2h5oh/datasize"
 	"golang.org/x/time/rate"
@@ -119,6 +120,11 @@ func (kv *KV) Get(ctx context.Context, key string) (val []byte, ok bool, err err
 		}
 	}()
 
+	_, ok = requestid.IDFromContext(ctx)
+	if !ok {
+		ctx = requestid.ContextWithRequestID(ctx, requestid.New())
+	}
+
 	err = kv.limiter.Wait(ctx)
 	if err != nil {
 		return nil, false, ErrRateLimited
@@ -198,6 +204,11 @@ func (kv *KV) Set(ctx context.Context, key string, val []byte) (err error) {
 			err = httpError{err: err}
 		}
 	}()
+
+	_, ok := requestid.IDFromContext(ctx)
+	if !ok {
+		ctx = requestid.ContextWithRequestID(ctx, requestid.New())
+	}
 
 	sessReq := &consulSessionRequest{
 		Name:     fmt.Sprintf("ad_guard_dns_session_%d", time.Now().UnixNano()),

@@ -27,6 +27,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testLogger is the common logger for tests.
+var testLogger = slogutil.NewDiscardLogger()
+
+// Common IP address string representations for tests.
+const (
+	testIPv4BlockedStr = "192.0.2.1"
+	testIPv4PassedStr  = "192.0.2.2"
+
+	testIPv6BlockedStr = "2001:db8::1"
+)
+
+// Common IP addresses for tests.
+var (
+	testIPv4Blocked = netip.MustParseAddr(testIPv4BlockedStr)
+	testIPv4Passed  = netip.MustParseAddr(testIPv4PassedStr)
+
+	testIPv6Blocked = netip.MustParseAddr(testIPv6BlockedStr)
+)
+
+// Common rules for tests.
+const (
+	testAllowRuleStr = "@@" + filtertest.RuleBlockStr
+
+	testAllowRule = filter.RuleText(testAllowRuleStr)
+)
+
 // newReqData returns data for calling FilterRequest.  The context uses
 // [filtertest.Timeout] and [tb.Cleanup] is used for its cancellation.  req uses
 // [filtertest.FQDNBlocked], [dns.TypeA], and [dns.ClassINET] for the request
@@ -71,7 +97,7 @@ func TestFilter_FilterRequest_customWithClientName(t *testing.T) {
 
 	f := newComposite(t, &composite.Config{
 		Custom: custom.New(&custom.Config{
-			Logger: slogutil.NewDiscardLogger(),
+			Logger: testLogger,
 			Rules: []filter.RuleText{
 				filtertest.RuleBlockForClientName,
 			},
@@ -91,6 +117,34 @@ func TestFilter_FilterRequest_customWithClientName(t *testing.T) {
 
 	wantRes := &filter.ResultBlocked{
 		List: filter.IDCustom,
+		Rule: filtertest.RuleBlockForClientName,
+	}
+
+	assert.Equal(t, wantRes, res)
+}
+
+func TestFilter_FilterRequest_customRuleListWithClientName(t *testing.T) {
+	t.Parallel()
+
+	rl := newFromStr(t, filtertest.RuleBlockForClientNameStr, filtertest.RuleListID1)
+
+	f := newComposite(t, &composite.Config{
+		CustomRuleLists: []*rulelist.Refreshable{rl},
+	})
+
+	ctx, req := newReqDataWithFQDN(t, filtertest.FQDNBlockedForClientName)
+	res, err := f.FilterRequest(ctx, req)
+	require.NoError(t, err)
+
+	assert.Nil(t, res)
+
+	req.ClientName = filtertest.ClientName
+
+	res, err = f.FilterRequest(ctx, req)
+	require.NoError(t, err)
+
+	wantRes := &filter.ResultBlocked{
+		List: filtertest.RuleListID1,
 		Rule: filtertest.RuleBlockForClientName,
 	}
 
@@ -157,26 +211,96 @@ func newFromStr(tb testing.TB, text string, id filter.ID) (rl *rulelist.Refresha
 func TestFilter_FilterRequest_customAllow(t *testing.T) {
 	t.Parallel()
 
-	const allowRule = "@@" + filtertest.RuleBlock
-
-	blockingRL := newFromStr(t, filtertest.RuleBlockStr, filtertest.RuleListID1)
 	customRL := custom.New(&custom.Config{
-		Logger: slogutil.NewDiscardLogger(),
-		Rules:  []filter.RuleText{allowRule},
+		Logger: testLogger,
+		Rules:  []filter.RuleText{testAllowRule},
+	})
+
+	want := &filter.ResultAllowed{
+		List: filter.IDCustom,
+		Rule: testAllowRule,
+	}
+
+	t.Run("common_rule_list", func(t *testing.T) {
+		t.Parallel()
+
+		blockingRL := newFromStr(t, filtertest.RuleBlockStr, filtertest.RuleListID1)
+		f := newComposite(t, &composite.Config{
+			Custom:    customRL,
+			RuleLists: []*rulelist.Refreshable{blockingRL},
+		})
+
+		ctx, req := newReqData(t)
+		res, err := f.FilterRequest(ctx, req)
+		require.NoError(t, err)
+
+		assert.Equal(t, want, res)
+	})
+
+	t.Run("safe_browsing", func(t *testing.T) {
+		t.Parallel()
+
+		sb := agdtest.NewFilter()
+		sb.OnFilterRequest = func(
+			_ context.Context,
+			_ *filter.Request,
+		) (r filter.Result, err error) {
+			return &filter.ResultBlocked{
+				List: filtertest.RuleListID1,
+			}, nil
+		}
+		f := newComposite(t, &composite.Config{
+			Custom:       customRL,
+			SafeBrowsing: sb,
+		})
+
+		ctx, req := newReqData(t)
+		res, err := f.FilterRequest(ctx, req)
+		require.NoError(t, err)
+
+		assert.Equal(t, want, res)
+	})
+
+	t.Run("category", func(t *testing.T) {
+		t.Parallel()
+
+		domainFilter := filtertest.NewDomainFilter(t, filtertest.HostBlocked)
+
+		f := newComposite(t, &composite.Config{
+			Custom:          customRL,
+			CategoryFilters: []composite.RequestFilter{domainFilter},
+		})
+
+		ctx, req := newReqData(t)
+		res, err := f.FilterRequest(ctx, req)
+		require.NoError(t, err)
+
+		assert.Equal(t, want, res)
+	})
+}
+
+func TestFilter_FilterRequest_customBlockDespiteCommonAllow(t *testing.T) {
+	t.Parallel()
+
+	allowingRL := newFromStr(t, testAllowRuleStr, filtertest.RuleListID1)
+
+	customRL := custom.New(&custom.Config{
+		Logger: testLogger,
+		Rules:  []filter.RuleText{filtertest.RuleBlock},
 	})
 
 	f := newComposite(t, &composite.Config{
 		Custom:    customRL,
-		RuleLists: []*rulelist.Refreshable{blockingRL},
+		RuleLists: []*rulelist.Refreshable{allowingRL},
 	})
 
 	ctx, req := newReqData(t)
 	res, err := f.FilterRequest(ctx, req)
 	require.NoError(t, err)
 
-	want := &filter.ResultAllowed{
+	want := &filter.ResultBlocked{
 		List: filter.IDCustom,
-		Rule: allowRule,
+		Rule: filtertest.RuleBlockStr,
 	}
 	assert.Equal(t, want, res)
 }
@@ -340,7 +464,7 @@ func newCustom(tb testing.TB, text string) (f *custom.Filter) {
 	tb.Helper()
 
 	return custom.New(&custom.Config{
-		Logger: slogutil.NewDiscardLogger(),
+		Logger: testLogger,
 		Rules: []filter.RuleText{
 			filter.RuleText(text),
 		},
@@ -446,7 +570,7 @@ func TestFilter_FilterRequest_safeSearch(t *testing.T) {
 	gen, err := safesearch.New(
 		&safesearch.Config{
 			Refreshable: &refreshable.Config{
-				Logger:    slogutil.NewDiscardLogger(),
+				Logger:    testLogger,
 				URL:       srvURL,
 				ID:        fltListID,
 				CachePath: cachePath,
@@ -538,15 +662,9 @@ func TestFilter_FilterRequest_domainFilters(t *testing.T) {
 func TestFilter_FilterResponse(t *testing.T) {
 	t.Parallel()
 
-	const (
-		passedIPv4Str  = "1.1.1.1"
-		blockedIPv4Str = "1.2.3.4"
-		blockedIPv6Str = "1234::cdef"
-
-		blockRules = filtertest.HostBlocked + "\n" +
-			blockedIPv4Str + "\n" +
-			blockedIPv6Str + "\n"
-	)
+	const blockRules = filtertest.HostBlocked + "\n" +
+		testIPv4BlockedStr + "\n" +
+		testIPv6BlockedStr + "\n"
 
 	blockingRL := newFromStr(t, blockRules, filtertest.RuleListID1)
 	f := newComposite(t, &composite.Config{
@@ -565,7 +683,7 @@ func TestFilter_FilterResponse(t *testing.T) {
 		name:    "pass",
 		reqFQDN: filtertest.FQDN,
 		respAns: dnsservertest.SectionAnswer{
-			dnsservertest.NewA(filtertest.FQDN, ttl, netip.MustParseAddr(passedIPv4Str)),
+			dnsservertest.NewA(filtertest.FQDN, ttl, testIPv4Passed),
 		},
 	}, {
 		want: &filter.ResultBlocked{
@@ -576,7 +694,7 @@ func TestFilter_FilterResponse(t *testing.T) {
 		reqFQDN: filtertest.FQDNCname,
 		respAns: dnsservertest.SectionAnswer{
 			dnsservertest.NewCNAME(filtertest.FQDNCname, ttl, filtertest.FQDNBlocked),
-			dnsservertest.NewA(filtertest.FQDNBlocked, ttl, netip.MustParseAddr(blockedIPv4Str)),
+			dnsservertest.NewA(filtertest.FQDNBlocked, ttl, testIPv4Blocked),
 		},
 	}}
 
@@ -597,29 +715,18 @@ func TestFilter_FilterResponse(t *testing.T) {
 func TestFilter_FilterResponse_blocked(t *testing.T) {
 	t.Parallel()
 
-	const (
-		passedIPv4Str  = "1.1.1.1"
-		blockedIPv4Str = "1.2.3.4"
-		blockedIPv6Str = "1234::cdef"
-
-		blockRules = filtertest.HostBlocked + "\n" +
-			blockedIPv4Str + "\n" +
-			blockedIPv6Str + "\n"
-	)
-
-	var (
-		blockedIPv4 = netip.MustParseAddr(blockedIPv4Str)
-		blockedIPv6 = netip.MustParseAddr(blockedIPv6Str)
-	)
+	const blockRules = filtertest.HostBlocked + "\n" +
+		testIPv4BlockedStr + "\n" +
+		testIPv6BlockedStr + "\n"
 
 	resBlocked4 := &filter.ResultBlocked{
 		List: filtertest.RuleListID1,
-		Rule: blockedIPv4Str,
+		Rule: testIPv4BlockedStr,
 	}
 
 	resBlocked6 := &filter.ResultBlocked{
 		List: filtertest.RuleListID1,
-		Rule: blockedIPv6Str,
+		Rule: testIPv6BlockedStr,
 	}
 
 	blockingRL := newFromStr(t, blockRules, filtertest.RuleListID1)
@@ -638,14 +745,14 @@ func TestFilter_FilterResponse_blocked(t *testing.T) {
 		want: resBlocked4,
 		name: "ipv4",
 		respAns: dnsservertest.SectionAnswer{
-			dnsservertest.NewA(filtertest.FQDNBlocked, ttl, blockedIPv4),
+			dnsservertest.NewA(filtertest.FQDNBlocked, ttl, testIPv4Blocked),
 		},
 		qType: dns.TypeA,
 	}, {
 		want: resBlocked6,
 		name: "ipv6",
 		respAns: dnsservertest.SectionAnswer{
-			dnsservertest.NewAAAA(filtertest.FQDNBlocked, ttl, blockedIPv6),
+			dnsservertest.NewAAAA(filtertest.FQDNBlocked, ttl, testIPv6Blocked),
 		},
 		qType: dns.TypeAAAA,
 	}, {
@@ -654,7 +761,7 @@ func TestFilter_FilterResponse_blocked(t *testing.T) {
 		respAns: dnsservertest.SectionAnswer{dnsservertest.NewHTTPS(
 			filtertest.FQDNBlocked,
 			ttl,
-			[]netip.Addr{blockedIPv4},
+			[]netip.Addr{testIPv4Blocked},
 			[]netip.Addr{},
 		)},
 		qType: dns.TypeHTTPS,
@@ -665,7 +772,7 @@ func TestFilter_FilterResponse_blocked(t *testing.T) {
 			filtertest.FQDNBlocked,
 			ttl,
 			[]netip.Addr{},
-			[]netip.Addr{blockedIPv6},
+			[]netip.Addr{testIPv6Blocked},
 		)},
 		qType: dns.TypeHTTPS,
 	}, {
@@ -674,8 +781,8 @@ func TestFilter_FilterResponse_blocked(t *testing.T) {
 		respAns: dnsservertest.SectionAnswer{dnsservertest.NewHTTPS(
 			filtertest.FQDNBlocked,
 			ttl,
-			[]netip.Addr{blockedIPv4},
-			[]netip.Addr{blockedIPv6},
+			[]netip.Addr{testIPv4Blocked},
+			[]netip.Addr{testIPv6Blocked},
 		)},
 		qType: dns.TypeHTTPS,
 	}, {
@@ -684,7 +791,7 @@ func TestFilter_FilterResponse_blocked(t *testing.T) {
 		respAns: dnsservertest.SectionAnswer{dnsservertest.NewHTTPS(
 			filtertest.FQDNBlocked,
 			ttl,
-			[]netip.Addr{netip.MustParseAddr(passedIPv4Str)},
+			[]netip.Addr{testIPv4Passed},
 			[]netip.Addr{},
 		)},
 		qType: dns.TypeHTTPS,
@@ -704,4 +811,32 @@ func TestFilter_FilterResponse_blocked(t *testing.T) {
 			assert.Equal(t, tc.want, res)
 		})
 	}
+}
+
+func TestFilter_FilterResponse_customRuleList(t *testing.T) {
+	t.Parallel()
+
+	rl := newFromStr(t, testIPv4BlockedStr, filtertest.RuleListID1)
+
+	f := newComposite(t, &composite.Config{
+		CustomRuleLists: []*rulelist.Refreshable{rl},
+	})
+
+	ctx, req := newReqDataWithFQDN(t, filtertest.FQDN)
+	respAns := dnsservertest.SectionAnswer{
+		dnsservertest.NewA(filtertest.FQDN, agdtest.FilteredResponseTTLSec, testIPv4Blocked),
+	}
+
+	res, err := f.FilterResponse(ctx, &filter.Response{
+		DNS:      dnsservertest.NewResp(dns.RcodeSuccess, req.DNS, respAns),
+		RemoteIP: filtertest.IPv4Client,
+	})
+	require.NoError(t, err)
+
+	wantRes := &filter.ResultBlocked{
+		List: filtertest.RuleListID1,
+		Rule: testIPv4BlockedStr,
+	}
+
+	assert.Equal(t, wantRes, res)
 }

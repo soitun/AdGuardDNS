@@ -137,7 +137,7 @@ func (s *Storage) loadHashSuffixes(pref Prefix) (sufs []suffix, ok bool) {
 // hostnameData and returns the total number of processed rules.  hostnameData
 // should contain valid, lowercased domain names, one per line, and may include
 // empty lines and comments ('#' at the first position).
-func (s *Storage) Reset(hostnameData []byte) (n int, err error) {
+func (s *Storage) Reset(hostnameData []byte) (n uint64, err error) {
 	s.resetMu.Lock()
 	defer s.resetMu.Unlock()
 

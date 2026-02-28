@@ -135,7 +135,7 @@ func (s *mockDNSServiceServer) newDNSProfile(isFullSync bool) (dp *backendpb.DNS
 	devTest := &backendpb.DeviceSettings{
 		Id:               devIDTest,
 		Name:             time.Now().Format("Test Name 2006-01-02T15:04:05"),
-		FilteringEnabled: false,
+		FilteringEnabled: true,
 		LinkedIp:         []byte{1, 1, 1, 1},
 		DedicatedIps:     [][]byte{{127, 0, 0, 1}},
 	}
@@ -248,9 +248,13 @@ func (s *mockDNSServiceServer) newDNSProfile(isFullSync bool) (dp *backendpb.DNS
 			BlocklistDomainRules: []string{"block.test"},
 			Enabled:              true,
 		},
-		RuleLists: &backendpb.RuleListsSettings{
-			Enabled: true,
+		CustomRuleLists: &backendpb.CustomRuleListsSettings{
 			Ids:     []string{"1"},
+			Enabled: true,
+		},
+		RuleLists: &backendpb.RuleListsSettings{
+			Ids:     []string{"2"},
+			Enabled: true,
 		},
 		Devices:             devices,
 		CustomRules:         []string{"||example.org^"},
@@ -286,8 +290,9 @@ func (s *mockDNSServiceServer) newDNSProfile(isFullSync bool) (dp *backendpb.DNS
 			Ids:     []string{"games"},
 			Enabled: true,
 		},
-		AccountId:                     "acc1234",
+		AccountIdInt:                  1234,
 		DeviceChanges:                 deviceChanges,
 		StandardAccessSettingsEnabled: true,
+		QueryLogStream:                false,
 	}
 }

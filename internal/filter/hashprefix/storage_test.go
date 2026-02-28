@@ -51,7 +51,7 @@ func TestStorage_Reset(t *testing.T) {
 	n, err := s.Reset(newHashes)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, n)
+	assert.Equal(t, uint64(1), n)
 	assert.False(t, s.Matches(filtertest.HostAdultContent))
 
 	h := sha256.Sum256([]byte(filtertest.Host))
@@ -70,7 +70,7 @@ func TestStorage_Reset(t *testing.T) {
 	n, err = s.Reset(newHashes)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, n)
+	assert.Equal(t, uint64(1), n)
 	assert.False(t, s.Matches(filtertest.HostAdultContent))
 	assert.True(t, s.Matches(filtertest.Host))
 }

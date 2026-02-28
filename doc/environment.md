@@ -12,6 +12,7 @@ AdGuard DNS uses [environment variables][wiki-env] to store some of the more sen
 - [`BILLSTAT_URL`](#BILLSTAT_URL)
 - [`BLOCKED_SERVICE_ENABLED`](#BLOCKED_SERVICE_ENABLED)
 - [`BLOCKED_SERVICE_INDEX_URL`](#BLOCKED_SERVICE_INDEX_URL)
+- [`BLOCK_PROFILE_RATE_DENOM`](#BLOCK_PROFILE_RATE_DENOM)
 - [`CATEGORY_FILTER_ENABLED`](#CATEGORY_FILTER_ENABLED)
 - [`CATEGORY_FILTER_INDEX_URL`](#CATEGORY_FILTER_INDEX_URL)
 - [`CONFIG_PATH`](#CONFIG_PATH)
@@ -33,6 +34,7 @@ AdGuard DNS uses [environment variables][wiki-env] to store some of the more sen
 - [`DNSCHECK_REMOTEKV_URL`](#DNSCHECK_REMOTEKV_URL)
 - [`FILTER_CACHE_PATH`](#FILTER_CACHE_PATH)
 - [`FILTER_INDEX_URL`](#FILTER_INDEX_URL)
+- [`FILTER_REFRESH_INTERVAL`](#FILTER_REFRESH_INTERVAL)
 - [`GENERAL_SAFE_ENABLED`](#GENERAL_SAFE_SEARCH_ENABLED)
 - [`GENERAL_SAFE_SEARCH_URL`](#GENERAL_SAFE_SEARCH_URL)
 - [`GEOIP_ASN_PATH` and `GEOIP_COUNTRY_PATH`](#GEOIP_ASN_PATH)
@@ -42,6 +44,7 @@ AdGuard DNS uses [environment variables][wiki-env] to store some of the more sen
 - [`LOG_FORMAT`](#LOG_FORMAT)
 - [`LOG_TIMESTAMP`](#LOG_TIMESTAMP)
 - [`MAX_THREADS`](#MAX_THREADS)
+- [`MUTEX_PROFILE_RATE_DENOM`](#MUTEX_PROFILE_RATE_DENOM)
 - [`METRICS_NAMESPACE`](#METRICS_NAMESPACE)
 - [`NEW_REG_DOMAINS_ENABLED`](#NEW_REG_DOMAINS_ENABLED)
 - [`NEW_REG_DOMAINS_URL`](#NEW_REG_DOMAINS_URL)
@@ -146,6 +149,14 @@ The HTTP(S) URL of the blocked service index file server. See the [external HTTP
 **Default:** No default value, the variable is required if `BLOCKED_SERVICE_ENABLED` is set to `1`.
 
 [ext-blocked]: externalhttp.md#filters-blocked-services
+
+## <a href="#BLOCK_PROFILE_RATE_DENOM" id="BLOCK_PROFILE_RATE_DENOM" name="BLOCK_PROFILE_RATE_DENOM">`BLOCK_PROFILE_RATE_DENOM`</a>
+
+The denominator of the fraction of goroutine blocking events that are reported
+in the blocking profile. If the value is less than or equal to `0`, then
+blocking events will not be reported.
+
+**Default:** `0`.
 
 ## <a href="#CATEGORY_FILTER_ENABLED" id="CATEGORY_FILTER_ENABLED" name="CATEGORY_FILTER_ENABLED">`CATEGORY_FILTER_ENABLED`</a>
 
@@ -289,6 +300,12 @@ The HTTP(S) URL or a hostless file URI (e.g. `file:///tmp/filters.json`) of the 
 
 [ext-lists]: externalhttp.md#filters-lists
 
+## <a href="#FILTER_REFRESH_INTERVAL" id="FILTER_REFRESH_INTERVAL" name="FILTER_REFRESH_INTERVAL">`FILTER_REFRESH_INTERVAL`</a>
+
+The interval between filters updates, as a human-readable duration.
+
+**Default:** No default value, the variable is **required.**
+
 ## <a href="#GENERAL_SAFE_SEARCH_ENABLED" id="GENERAL_SAFE_SEARCH_ENABLED" name="GENERAL_SAFE_SEARCH_ENABLED">`GENERAL_SAFE_SEARCH_ENABLED`</a>
 
 When set to `1`, enable the general safe search filter. When set to `0`, disable it.
@@ -355,6 +372,14 @@ If `1`, show timestamps in the plain text logs. If `0`, don't show the timestamp
 ## <a href="#MAX_THREADS" id="MAX_THREADS" name="MAX_THREADS">`MAX_THREADS`</a>
 
 If greater than zero, sets the maximum number of threads for the Go runtime. If zero, the number remains the default one, which is 10 000. It must not be negative.
+
+**Default:** `0`.
+
+## <a href="#" id="MUTEX_PROFILE_RATE_DENOM" name="MUTEX_PROFILE_RATE_DENOM">`MUTEX_PROFILE_RATE_DENOM`</a>
+
+The denominator of the fraction of mutex contention events that are reported in
+the mutex profile. If the value is less than or equal to `0`, then mutex
+contention events will not be reported.
 
 **Default:** `0`.
 

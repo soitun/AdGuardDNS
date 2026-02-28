@@ -41,7 +41,7 @@ func TestHandler_Refresh_healthcheck(t *testing.T) {
 			return rw.WriteMsg(ctx, req, &dns.Msg{})
 		}
 
-		return rw.WriteMsg(ctx, req, nrw.Msg())
+		return rw.WriteMsg(ctx, req, nrw.Resp())
 	})
 
 	upstream, _ := dnsservertest.RunDNSServer(t, handlerFunc)

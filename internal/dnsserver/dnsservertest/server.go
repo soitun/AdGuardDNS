@@ -31,9 +31,9 @@ func RunDNSServer(t testing.TB, h dnsserver.Handler) (s *dnsserver.ServerDNS, ad
 	conf := &dnsserver.ConfigDNS{
 		Base: &dnsserver.ConfigBase{
 			BaseLogger: slogutil.NewDiscardLogger(),
+			Handler:    h,
 			Name:       "test",
 			Addr:       "127.0.0.1:0",
-			Handler:    h,
 		},
 		MaxUDPRespSize: dns.MaxMsgSize,
 	}
@@ -65,9 +65,9 @@ func RunTLSServer(t testing.TB, h dnsserver.Handler, tlsConfig *tls.Config) (add
 		DNS: &dnsserver.ConfigDNS{
 			Base: &dnsserver.ConfigBase{
 				BaseLogger: slogutil.NewDiscardLogger(),
+				Handler:    h,
 				Name:       "test",
 				Addr:       "127.0.0.1:0",
-				Handler:    h,
 			},
 		},
 		TLSConfig: tlsConfig,
@@ -124,9 +124,9 @@ func RunDNSCryptServer(t testing.TB, h dnsserver.Handler) (s *TestDNSCryptServer
 	conf := &dnsserver.ConfigDNSCrypt{
 		Base: &dnsserver.ConfigBase{
 			BaseLogger: slogutil.NewDiscardLogger(),
+			Handler:    h,
 			Name:       "test",
 			Addr:       "127.0.0.1:0",
-			Handler:    h,
 		},
 		ProviderName: s.ProviderName,
 		ResolverCert: cert,
@@ -173,10 +173,10 @@ func RunLocalHTTPSServer(
 	conf := &dnsserver.ConfigHTTPS{
 		Base: &dnsserver.ConfigBase{
 			BaseLogger: slogutil.NewDiscardLogger(),
-			Name:       "test",
-			Addr:       "127.0.0.1:0",
 			Handler:    h,
 			Network:    network,
+			Name:       "test",
+			Addr:       "127.0.0.1:0",
 		},
 		TLSConfDefault: tlsConfig,
 		TLSConfH3:      tlsConfigH3,
@@ -206,9 +206,9 @@ func RunLocalQUICServer(
 		TLSConfig: tlsConfig,
 		Base: &dnsserver.ConfigBase{
 			BaseLogger: slogutil.NewDiscardLogger(),
+			Handler:    h,
 			Name:       "test",
 			Addr:       "127.0.0.1:0",
-			Handler:    h,
 		},
 	}
 

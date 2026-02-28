@@ -29,8 +29,11 @@ message Profile {
   }
   Ratelimiter ratelimiter = 7;
 
+  // TODO(f.setrakov): Remove after migrating to account_id_int;
   string account_id = 19;
   string profile_id = 8;
+
+  int32 account_id_int = 29;
 
   repeated string device_ids = 9;
 
@@ -44,6 +47,7 @@ message Profile {
   bool filtering_enabled = 16;
   bool ip_log_enabled = 17;
   bool query_log_enabled = 18;
+  bool query_log_stream = 30;
 
   oneof adult_blocking_mode {
     BlockingModeCustomIP adult_blocking_mode_custom_ip = 21;
@@ -119,6 +123,11 @@ message FilterConfig {
     DayInterval sun = 7;
   }
 
+  message CustomRuleList {
+    repeated string ids = 1;
+    bool enabled = 2;
+  }
+
   message RuleList {
     repeated string ids = 1;
     bool enabled = 2;
@@ -140,6 +149,7 @@ message FilterConfig {
   RuleList rule_list = 3;
   SafeBrowsing safe_browsing = 4;
   CategoryFilter category_filter = 5 [deprecated=true];
+  CustomRuleList custom_rule_list = 6;
 }
 
 message DayInterval {

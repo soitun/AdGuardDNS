@@ -9,6 +9,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/dnsmsg"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/rulelist"
+	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/urlfilter"
 	"github.com/miekg/dns"
 )
@@ -28,6 +29,9 @@ type Filter struct {
 	// ruleLists are the enabled rule-list filters of the profile or filtering
 	// group.
 	ruleLists []*rulelist.Refreshable
+
+	// customRuleLists are the enabled custom rule-list filters of the profile.
+	customRuleLists []*rulelist.Refreshable
 
 	// svcLists are the rule-list filters of the profile's enabled blocked
 	// services, if any.
@@ -69,6 +73,9 @@ type Config struct {
 	// CategoryFilters are the enabled category request filters of the profile.
 	CategoryFilters []RequestFilter
 
+	// CustomRuleLists are the enabled custom rule-list filters of the profile.
+	CustomRuleLists []*rulelist.Refreshable
+
 	// RuleLists are the enabled rule-list filters of the profile or filtering
 	// group, if any.  All items must not be nil.
 	RuleLists []*rulelist.Refreshable
@@ -84,11 +91,12 @@ type Config struct {
 // and method Reset.
 func New(c *Config) (f *Filter) {
 	f = &Filter{
-		ufReq:     c.URLFilterRequest,
-		ufRes:     c.URLFilterResult,
-		custom:    c.Custom,
-		ruleLists: c.RuleLists,
-		svcLists:  c.ServiceLists,
+		ufReq:           c.URLFilterRequest,
+		ufRes:           c.URLFilterResult,
+		custom:          c.Custom,
+		customRuleLists: c.CustomRuleLists,
+		ruleLists:       c.RuleLists,
+		svcLists:        c.ServiceLists,
 	}
 
 	// DO NOT change the order of request filters without necessity.
@@ -143,14 +151,16 @@ var _ filter.Interface = (*Filter)(nil)
 // FilterRequest implements the [filter.Interface] interface for *Filter.  The
 // order in which the filters are applied is the following:
 //
-//  1. Custom filter.
-//  2. Rule-list filters.
-//  3. Blocked-service filters.
-//  4. Dangerous-domains filter.
-//  5. Adult-content filter.
-//  6. General safe-search filter.
-//  7. YouTube safe-search filter.
-//  8. Newly-registered domains filter.
+//  1. Custom filtering rules.
+//  2. Custom rule-list filters.
+//  3. Common rule-list filters.
+//  4. Blocked-service filters.
+//  5. Dangerous-domains filter.
+//  6. Adult-content filter.
+//  7. General safe-search filter.
+//  8. YouTube safe-search filter.
+//  9. Newly-registered domains filter.
+//  10. Category filters.
 //
 // If f is empty, it returns nil with no error.
 func (f *Filter) FilterRequest(
@@ -160,12 +170,14 @@ func (f *Filter) FilterRequest(
 	// Prepare common data for filters.  Firstly, check the profile's rule-list
 	// filtering, the custom rules, and the rules from blocked services
 	// settings.
-	rlRes := f.filterReqWithRuleLists(ctx, req)
+	rlRes, fromCustom := f.filterReqWithRuleLists(ctx, req)
 	switch flRes := rlRes.(type) {
 	case *filter.ResultAllowed:
 		// Skip any additional filtering if the domain is explicitly allowed by
-		// user's custom rule.
-		if flRes.List == filter.IDCustom {
+		// user's custom rule or rule list.  Allowed results from common rule
+		// lists and blocked services should wait until all request filters are
+		// checked, since those can still block the same domains.
+		if fromCustom {
 			return flRes, nil
 		}
 	case
@@ -198,39 +210,35 @@ func (f *Filter) FilterRequest(
 func (f *Filter) filterReqWithRuleLists(
 	ctx context.Context,
 	req *filter.Request,
-) (r filter.Result) {
+) (r filter.Result, fromCustom bool) {
 	f.ufReq.Reset()
 
 	f.ufReq.ClientIP = req.RemoteIP
-	f.ufReq.ClientName = req.ClientName
+	// TODO(f.setrakov): Reuse client identifiers sets.
+	addClientID(f.ufReq, req.ClientName)
 	f.ufReq.DNSType = req.QType
 	f.ufReq.Hostname = req.Host
 
 	c := newURLFilterResultCollector()
-	mod := f.filterReqWithCustom(ctx, req, c, f.ufReq, f.ufRes)
-	if mod != nil {
-		// Custom DNS rewrites have priority over other rules.
-		return mod
+	r = f.filterReqWithCustomFilter(ctx, req, c)
+	if r != nil {
+		// Custom rules have priority over all other rule lists.
+		return r, true
+	}
+
+	r = f.filterReqWithCustomRuleLists(ctx, req, c)
+	if r != nil {
+		// Custom rule lists have priority over the common rule lists.
+		return r, true
 	}
 
 	// Don't use the device name for non-custom filters.
-	f.ufReq.ClientName = ""
+	f.ufReq.ClientIdentifiers.Clear()
 
-	for _, rl := range f.ruleLists {
-		f.ufRes.Reset()
-		ok := rl.SetURLFilterResult(ctx, f.ufReq, f.ufRes)
-		if ok {
-			id, _ := rl.ID()
-
-			mod = rulelist.ProcessDNSRewrites(req, f.ufRes.DNSRewrites(), id)
-			if mod != nil {
-				// DNS rewrites have higher priority, so a modified request must
-				// be returned immediately.
-				return mod
-			}
-
-			c.add(id, "", f.ufRes)
-		}
+	mod := f.filterReqWithCommonRuleLists(ctx, req, c)
+	if mod != nil {
+		// DNS rewrites from custom rule lists have priority over other rules.
+		return mod, false
 	}
 
 	for _, rl := range f.svcLists {
@@ -243,41 +251,119 @@ func (f *Filter) filterReqWithRuleLists(
 		}
 	}
 
-	return c.toInternal(req.QType)
+	return c.toInternal(req.QType), false
 }
 
-// filterReqWithCustom filters one question's information through the custom
-// rule-list filter of the composite filter, if there is one.  All arguments
+// addClientID adds id to req.ClientIdentifiers, initializing the set if
+// necessary.  req must not be nil.
+func addClientID(req *urlfilter.DNSRequest, id string) {
+	if id == "" {
+		return
+	}
+
+	if req.ClientIdentifiers == nil {
+		req.ClientIdentifiers = container.NewSortedSliceSet(id)
+
+		return
+	}
+
+	req.ClientIdentifiers.Add(id)
+}
+
+// filterReqWithCustomFilter filters one question's information through the
+// custom-rules filter of the composite filter, if there is one.  All arguments
 // must not be nil.
-func (f *Filter) filterReqWithCustom(
+func (f *Filter) filterReqWithCustomFilter(
 	ctx context.Context,
 	req *filter.Request,
 	c *urlFilterResultCollector,
-	ufReq *urlfilter.DNSRequest,
-	ufRes *urlfilter.DNSResult,
-) (res filter.Result) {
+) (r filter.Result) {
 	if f.custom == nil {
 		return nil
 	}
 
 	// Only use the device name for custom filters of profiles with devices.
-	ufReq.ClientName = req.ClientName
+	addClientID(f.ufReq, req.ClientName)
 
-	ufRes.Reset()
+	f.ufRes.Reset()
 
-	ok := f.custom.SetURLFilterResult(ctx, ufReq, ufRes)
+	ok := f.custom.SetURLFilterResult(ctx, f.ufReq, f.ufRes)
 	if !ok {
 		return nil
 	}
 
 	id := filter.IDCustom
-
-	mod := rulelist.ProcessDNSRewrites(req, ufRes.DNSRewrites(), id)
-	if mod != nil {
-		return mod
+	r = rulelist.ProcessDNSRewrites(req, f.ufRes.DNSRewrites(), id)
+	if r != nil {
+		return r
 	}
 
-	c.add(id, "", ufRes)
+	c.add(id, "", f.ufRes)
+
+	return c.toInternal(req.QType)
+}
+
+// filterReqWithCustomRuleLists filters the request through all custom rule-list
+// filters of the composite filter, if there are any.  All arguments must not be
+// nil.
+func (f *Filter) filterReqWithCustomRuleLists(
+	ctx context.Context,
+	req *filter.Request,
+	c *urlFilterResultCollector,
+) (r filter.Result) {
+	// Only use the device name for custom filters of profiles with devices.
+	addClientID(f.ufReq, req.ClientName)
+
+	for _, rl := range f.customRuleLists {
+		f.ufRes.Reset()
+		ok := rl.SetURLFilterResult(ctx, f.ufReq, f.ufRes)
+		if !ok {
+			continue
+		}
+
+		id, _ := rl.ID()
+
+		// TODO(a.garipov):  See if DNS rewrites from multiple rule lists must
+		// be merged together.
+		r = rulelist.ProcessDNSRewrites(req, f.ufRes.DNSRewrites(), id)
+		if r != nil {
+			// DNS rewrites have higher priority, so a modified request must be
+			// returned immediately.
+			return r
+		}
+
+		c.add(id, "", f.ufRes)
+	}
+
+	return c.toInternal(req.QType)
+}
+
+// filterReqWithCommonRuleLists filters the request through all common rule-list
+// filters of the composite filter, if there are any.  All arguments must not be
+// nil.
+func (f *Filter) filterReqWithCommonRuleLists(
+	ctx context.Context,
+	req *filter.Request,
+	c *urlFilterResultCollector,
+) (mod filter.Result) {
+	for _, rl := range f.ruleLists {
+		f.ufRes.Reset()
+		ok := rl.SetURLFilterResult(ctx, f.ufReq, f.ufRes)
+		if !ok {
+			continue
+		}
+
+		id, _ := rl.ID()
+
+		mod = rulelist.ProcessDNSRewrites(req, f.ufRes.DNSRewrites(), id)
+		if mod != nil {
+			// DNS rewrites have higher priority, so a modified request must be
+			// returned immediately.
+			return mod
+		}
+
+		c.add(id, "", f.ufRes)
+	}
 
 	return nil
 }
@@ -335,29 +421,27 @@ func (f *Filter) filterRespWithRuleLists(
 	f.ufReq.Hostname = host
 
 	c := newURLFilterResultCollector()
-	for _, rl := range f.ruleLists {
-		id, _ := rl.ID()
-
-		f.ufRes.Reset()
-
-		ok := rl.SetURLFilterResult(ctx, f.ufReq, f.ufRes)
-		if ok {
-			c.add(id, "", f.ufRes)
-		}
-	}
-
 	if f.custom != nil {
-		f.ufReq.ClientName = resp.ClientName
+		addClientID(f.ufReq, resp.ClientName)
 
 		f.ufRes.Reset()
 
 		ok := f.custom.SetURLFilterResult(ctx, f.ufReq, f.ufRes)
 		if ok {
 			c.add(filter.IDCustom, "", f.ufRes)
+
+			return c.toInternal(rrType)
 		}
 	}
 
-	f.ufReq.ClientName = ""
+	r = f.filterRespWithCustomRuleLists(ctx, resp, c, rrType)
+	if r != nil {
+		return r
+	}
+
+	f.ufReq.ClientIdentifiers.Clear()
+
+	f.filterRespWithCommonRuleLists(ctx, c)
 
 	for _, rl := range f.svcLists {
 		id, svcID := rl.ID()
@@ -370,6 +454,51 @@ func (f *Filter) filterRespWithRuleLists(
 	}
 
 	return c.toInternal(rrType)
+}
+
+// filterRespWithCustomRuleLists filters one answer's information through the
+// custom rule lists of the composite filter, if there are any.  All arguments
+// must not be nil.
+func (f *Filter) filterRespWithCustomRuleLists(
+	ctx context.Context,
+	resp *filter.Response,
+	c *urlFilterResultCollector,
+	rrType dnsmsg.RRType,
+) (r filter.Result) {
+	// Only use the device name for custom filters of profiles with devices.
+	addClientID(f.ufReq, resp.ClientName)
+
+	for _, rl := range f.customRuleLists {
+		id, _ := rl.ID()
+
+		f.ufRes.Reset()
+
+		ok := rl.SetURLFilterResult(ctx, f.ufReq, f.ufRes)
+		if ok {
+			c.add(id, "", f.ufRes)
+		}
+	}
+
+	return c.toInternal(rrType)
+}
+
+// filterRespWithCommonRuleLists filters one answer's information through the
+// common rule lists of the composite filter, if there are any.  All arguments
+// must not be nil.
+func (f *Filter) filterRespWithCommonRuleLists(
+	ctx context.Context,
+	c *urlFilterResultCollector,
+) {
+	for _, rl := range f.ruleLists {
+		id, _ := rl.ID()
+
+		f.ufRes.Reset()
+
+		ok := rl.SetURLFilterResult(ctx, f.ufReq, f.ufRes)
+		if ok {
+			c.add(id, "", f.ufRes)
+		}
+	}
 }
 
 // filterHTTPSAnswer filters HTTPS answers information through all rule list

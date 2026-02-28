@@ -15,10 +15,6 @@ Development is supported on Linux and macOS (aka Darwin) systems.
 
 2. Call `make init` to set up the Git pre-commit hook.
 
-3. Call `make go-tools` to install analyzers and other tools into the `bin` directory.
-
-## <a href="#makefile" id="makefile" name="makefile">Common Makefile macros and targets</a>
-
 Most development tasks are done through the use of our Makefile. Please keep the Makefile POSIX-compliant and portable.
 
 ### <a href="#makefile-macros" id="makefile-macros" name="makefile-macros">Macros</a>
@@ -69,8 +65,6 @@ This is not an extensive list. See `../Makefile`.
 - `make go-test`: Run Go tests.
 
 - `make go-bench`: Run Go benchmarks.
-
-- `make go-tools`: Install the Go static analysis tools locally.
 
 - `make test`: Currently does the same thing as `make go-test` but is defined both because it's a common target and also in case code in another language appears in the future.
 

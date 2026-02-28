@@ -95,13 +95,13 @@ var _ Interface = (*FileSystem)(nil)
 
 // Write implements the Interface interface for *FileSystem.
 func (l *FileSystem) Write(ctx context.Context, e *Entry) (err error) {
-	optslog.Trace1(ctx, l.logger, "writing file logs", "req_id", e.RequestID)
+	l.logger.Log(ctx, slogutil.LevelTrace, "writing file logs")
+
 	defer func() {
-		optslog.Trace2(
+		optslog.Trace1(
 			ctx,
 			l.logger,
 			"writing file logs",
-			"req_id", e.RequestID,
 			slogutil.KeyError, err,
 		)
 	}()
@@ -126,7 +126,7 @@ func (l *FileSystem) Write(ctx context.Context, e *Entry) (err error) {
 
 	c, id, r := resultData(e.RequestResult, e.ResponseResult)
 	*entBuf.ent = jsonlEntry{
-		RequestID:       e.RequestID.String(),
+		AccountID:       e.AccountID,
 		ProfileID:       e.ProfileID,
 		DeviceID:        e.DeviceID,
 		ClientCountry:   e.ClientCountry,
@@ -142,6 +142,7 @@ func (l *FileSystem) Write(ctx context.Context, e *Entry) (err error) {
 		// #nosec G115 -- The overflow is safe, since this is a random number.
 		Random:     uint16(l.rng.Uint32()),
 		DNSSEC:     mathutil.BoolToNumber[uint8](e.DNSSEC),
+		Stream:     mathutil.BoolToNumber[uint8](e.Stream),
 		Protocol:   e.Protocol,
 		ResultCode: c,
 		RemoteIP:   remoteIP,

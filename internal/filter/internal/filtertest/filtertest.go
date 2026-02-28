@@ -144,6 +144,7 @@ func NewRuleListIndex(downloadURL string) (b []byte) {
 		"filters": []map[string]any{{
 			"filterKey":   RuleListID1Str,
 			"downloadUrl": downloadURL,
+			"timeUpdated": "2025-12-17T13:57:15+0200",
 		}},
 	}))
 }

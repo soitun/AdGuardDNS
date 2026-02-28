@@ -54,6 +54,11 @@ ratelimit:
         stop: 1000
         resume: 800
 
+    # Configuration for the active request limiting.
+    active_request_limit:
+        enabled: true
+        max: 10000
+
     # Configuration of QUIC streams limiting.
     quic:
         enabled: true
@@ -291,8 +296,7 @@ filters:
     custom_filter_cache_size: 1024
     # The size of the LRU cache of safe-search filtering results.
     safe_search_cache_size: 1024
-    # How often to update filters from the index.  See the documentation for the
-    # FILTER_INDEX_URL environment variable.
+    # How often to update blocked services, safe search, and category filters.
     refresh_interval: 1h
     # The timeout for the entire filter update operation.  Note that filter
     # rule-list index and each filter rule-list update operations have their own

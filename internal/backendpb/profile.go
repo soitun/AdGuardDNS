@@ -485,6 +485,24 @@ func rulesToInternal(
 	return rules
 }
 
+// toInternal is a helper that converts the custom filter-list settings from the
+// backend response to AdGuard DNS custom rule-list configuration.  If x is nil,
+// toInternal returns a disabled configuration.
+func (x *CustomRuleListsSettings) toInternal(
+	ctx context.Context,
+	errColl errcoll.Interface,
+	logger *slog.Logger,
+) (c *filter.ConfigCustomRuleList) {
+	c = &filter.ConfigCustomRuleList{}
+	if x == nil {
+		return c
+	}
+
+	c.Enabled, c.IDs = ruleListSettingsData(ctx, errColl, logger, "custom rule-list", x)
+
+	return c
+}
+
 // toInternal is a helper that converts the filter lists from the backend
 // response to AdGuard DNS rule-list configuration.  If x is nil, toInternal
 // returns a disabled configuration.
@@ -498,22 +516,56 @@ func (x *RuleListsSettings) toInternal(
 		return c
 	}
 
-	c.Enabled = x.Enabled
-	c.IDs = make([]filter.ID, 0, len(x.Ids))
+	c.Enabled, c.IDs = ruleListSettingsData(ctx, errColl, logger, "rule-list", x)
 
-	for i, idStr := range x.Ids {
+	return c
+}
+
+// ruleListSettings is the common type for [CustomRuleListsSettings] and
+// [RuleListsSettings].
+type ruleListSettings interface {
+	GetEnabled() (ok bool)
+	GetIds() (ids []string)
+}
+
+// type check
+var (
+	_ ruleListSettings = (*CustomRuleListsSettings)(nil)
+	_ ruleListSettings = (*RuleListsSettings)(nil)
+)
+
+// ruleListSettingsData converts the data from the given rule-list settings to
+// AdGuard DNS entities. Errors are reported to the error collector and logged.
+// kind is used for error reporting and logging.
+func ruleListSettingsData(
+	ctx context.Context,
+	errColl errcoll.Interface,
+	logger *slog.Logger,
+	kind string,
+	s ruleListSettings,
+) (enabled bool, ids []filter.ID) {
+	enabled = s.GetEnabled()
+	idStrs := s.GetIds()
+	l := len(idStrs)
+	if l == 0 {
+		return enabled, nil
+	}
+
+	ids = make([]filter.ID, 0, l)
+
+	for i, idStr := range idStrs {
 		id, err := filter.NewID(idStr)
 		if err != nil {
-			err = fmt.Errorf("at index %d: %w", i, err)
-			errcoll.Collect(ctx, errColl, logger, "converting filter id", err)
+			err = fmt.Errorf("converting %s filter ids: at index %d: %w", kind, i, err)
+			errcoll.Collect(ctx, errColl, logger, "converting rule-list settings", err)
 
 			continue
 		}
 
-		c.IDs = append(c.IDs, id)
+		ids = append(ids, id)
 	}
 
-	return c
+	return enabled, ids
 }
 
 // toInternal is a helper that converts category filter settings from backend

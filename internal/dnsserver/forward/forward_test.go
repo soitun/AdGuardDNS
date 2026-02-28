@@ -38,7 +38,7 @@ func TestHandler_ServeDNS(t *testing.T) {
 	err := handler.ServeDNS(testutil.ContextWithTimeout(t, testTimeout), rw, req)
 	require.NoError(t, err)
 
-	dnsservertest.RequireResponse(t, req, rw.Msg(), 1, dns.RcodeSuccess, false)
+	dnsservertest.RequireResponse(t, req, rw.Resp(), 1, dns.RcodeSuccess, false)
 }
 
 func TestHandler_ServeDNS_fallbackNetError(t *testing.T) {
@@ -64,5 +64,5 @@ func TestHandler_ServeDNS_fallbackNetError(t *testing.T) {
 	err := handler.ServeDNS(context.Background(), rw, req)
 	require.NoError(t, err)
 
-	dnsservertest.RequireResponse(t, req, rw.Msg(), 1, dns.RcodeSuccess, false)
+	dnsservertest.RequireResponse(t, req, rw.Resp(), 1, dns.RcodeSuccess, false)
 }

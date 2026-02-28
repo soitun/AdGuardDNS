@@ -14,8 +14,6 @@ func ExampleNewHandler() {
 	conf := &dnsserver.ConfigDNS{
 		Base: &dnsserver.ConfigBase{
 			BaseLogger: slogutil.NewDiscardLogger(),
-			Name:       "srv",
-			Addr:       "127.0.0.1:0",
 			Handler: forward.NewHandler(&forward.HandlerConfig{
 				UpstreamsAddresses: []*forward.UpstreamPlainConfig{{
 					Network: forward.NetworkAny,
@@ -28,6 +26,8 @@ func ExampleNewHandler() {
 					Timeout: testTimeout,
 				}},
 			}),
+			Name: "srv",
+			Addr: "127.0.0.1:0",
 		},
 	}
 

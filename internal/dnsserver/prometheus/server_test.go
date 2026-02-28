@@ -28,10 +28,10 @@ func TestServerMetricsListener_integration_requestLifetime(t *testing.T) {
 	conf := &dnsserver.ConfigDNS{
 		Base: &dnsserver.ConfigBase{
 			BaseLogger: testLogger,
-			Name:       "test",
-			Addr:       "127.0.0.1:0",
 			Handler:    dnsservertest.NewDefaultHandler(),
 			Metrics:    mtrcListener,
+			Name:       "test",
+			Addr:       "127.0.0.1:0",
 		},
 	}
 	srv := dnsserver.NewServerDNS(conf)

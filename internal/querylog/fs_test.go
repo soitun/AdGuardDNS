@@ -43,11 +43,9 @@ func TestFileSystem_Write(t *testing.T) {
 	rep := strings.NewReplacer(
 		" ", "",
 		"\n", "",
-		"REQID", testRequestID.String(),
 	)
 	want := rep.Replace(`
 {
-  "u":"REQID",
   "b":"prof1234",
   "i":"dev1234",
   "c":"RU",
@@ -58,11 +56,13 @@ func TestFileSystem_Write(t *testing.T) {
   "t":123000,
   "a":1234,
   "e":5,
+  "ac":1234,
   "q":1,
   "r":0,
   "rn":13933,
   "f":2,
   "s":1,
+  "st":1,
   "p":8
 }`) + "\n"
 
@@ -73,6 +73,8 @@ func TestFileSystem_Write(t *testing.T) {
 		e.RequestResult, e.ResponseResult = nil, nil
 		e.ResponseCountry = geoip.CountryNone
 		e.ResponseCode = dns.RcodeNameError
+		e.AccountID = 1234
+		e.Stream = true
 
 		err = l.Write(ctx, e)
 		require.NoError(t, err)
@@ -83,11 +85,9 @@ func TestFileSystem_Write(t *testing.T) {
 		rep = strings.NewReplacer(
 			" ", "",
 			"\n", "",
-			"REQID", testRequestID.String(),
 		)
 		want = rep.Replace(`
 {
-  "u":"REQID",
   "b":"prof1234",
   "i":"dev1234",
   "c":"RU",
@@ -95,11 +95,13 @@ func TestFileSystem_Write(t *testing.T) {
   "t":123000,
   "a":1234,
   "e":5,
+  "ac":1234,
   "q":1,
   "r":3,
   "rn":10182,
   "f":1,
   "s":1,
+  "st":1,
   "p":8
 }`) + "\n"
 

@@ -251,7 +251,7 @@ func TestMiddleware_Wrap(t *testing.T) {
 			serveErr := h.ServeDNS(ctx, rw, tc.req)
 			testutil.AssertErrorMsg(t, tc.wantErrMsg, serveErr)
 
-			assert.Equal(t, wantResp, rw.Msg())
+			assert.Equal(t, wantResp, rw.Resp())
 		})
 	}
 }
@@ -734,7 +734,7 @@ func TestMiddleware_Wrap_filtering(t *testing.T) {
 			serveErr := h.ServeDNS(ctx, rw, tc.req)
 			testutil.AssertErrorMsg(t, tc.wantErrMsg, serveErr)
 
-			assert.Equal(t, tc.wantResp, rw.Msg())
+			assert.Equal(t, tc.wantResp, rw.Resp())
 		})
 	}
 }

@@ -78,7 +78,7 @@ func BenchmarkDefault(b *testing.B) {
 
 		b.ReportAllocs()
 		for i := 0; b.Loop(); i++ {
-			cache.SetWithExpire(i, i, 2000)
+			cache.SetWithExpire(i, i, expDuration)
 			_, ok = cache.Get(i)
 		}
 

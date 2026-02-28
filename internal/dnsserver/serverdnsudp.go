@@ -9,7 +9,6 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/dnsserver/netext"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
-	"github.com/AdguardTeam/golibs/syncutil"
 	"github.com/miekg/dns"
 )
 
@@ -24,7 +23,7 @@ func (s *ServerDNS) serveUDP(ctx context.Context, conn net.PacketConn) {
 	defer func() { closeWithLog(ctx, s.baseLogger, "closing udp conn", conn) }()
 
 	for s.isStarted() {
-		err := s.acceptUDPMsg(ctx, conn)
+		err := s.acceptUDP(ctx, conn)
 		if err == nil {
 			continue
 		}
@@ -38,148 +37,96 @@ func (s *ServerDNS) serveUDP(ctx context.Context, conn net.PacketConn) {
 				slogutil.KeyError, err,
 			)
 		} else {
-			s.baseLogger.ErrorContext(ctx, "listening udp failed", slogutil.KeyError, err)
+			s.baseLogger.ErrorContext(ctx, "accept udp error", slogutil.KeyError, err)
 		}
 
 		return
 	}
 }
 
-// acceptUDPMsg reads and starts processing a single UDP message.
-func (s *ServerDNS) acceptUDPMsg(ctx context.Context, conn net.PacketConn) (err error) {
-	bufPtr := s.udpPool.Get()
-	n, sess, err := s.readUDPMsg(ctx, conn, *bufPtr)
+// acceptUDP reads and starts processing a single UDP message.
+//
+// NOTE:  Any error returned from this method stops handling on conn.
+func (s *ServerDNS) acceptUDP(ctx context.Context, conn net.PacketConn) (err error) {
+	req, sess, err := s.readUDPMsg(ctx, conn)
 	if err != nil {
-		s.udpPool.Put(bufPtr)
-
 		if isNonCriticalNetError(err) || errors.Is(err, dns.ErrShortRead) {
 			// Non-critical errors, do not register in the metrics or log
 			// anywhere.
 			return nil
 		}
 
-		return err
+		return fmt.Errorf("reading udp message: %w", err)
+	} else if req == nil {
+		// Do not interrupt handling on bad messages.
+		return nil
 	}
 
-	// Save the start time here, but create the context inside the goroutine,
-	// since s.requestContext can be slow.
-	//
-	// TODO(a.garipov):  The slowness is likely due to constant reallocation of
-	// timers in [context.WithTimeout].  Consider creating an optimized reusable
-	// version.
-	startTime := time.Now()
-
-	return s.taskPool.submitWG(s.activeTaskWG, func() {
-		reqCtx, reqCancel := s.requestContext(context.Background())
-		defer reqCancel()
-
-		reqCtx = ContextWithRequestInfo(reqCtx, &RequestInfo{
-			StartTime: startTime,
-		})
-
-		s.serveUDPPacket(reqCtx, (*bufPtr)[:n], conn, sess)
-		s.udpPool.Put(bufPtr)
-	})
-}
-
-// serveUDPPacket serves a new UDP request.  It is intended to be used as a
-// goroutine.  buf, conn, and sess must not be nil.
-func (s *ServerDNS) serveUDPPacket(
-	ctx context.Context,
-	buf []byte,
-	conn net.PacketConn,
-	sess netext.PacketSession,
-) {
-	defer s.handlePanicAndRecover(ctx)
-
-	s.serveDNS(ctx, buf, &udpResponseWriter{
-		respPool:     s.respPool,
+	rw := &udpResponseWriter{
 		udpSession:   sess,
 		conn:         conn,
 		writeTimeout: s.writeTimeout,
 		maxRespSize:  s.maxUDPRespSize,
+	}
+
+	reqCtx, reqCancel := s.reqCtx.New(context.WithoutCancel(ctx))
+	defer func() { callOnError(reqCancel, recover(), err) }()
+
+	reqCtx = ContextWithRequestInfo(reqCtx, &RequestInfo{
+		StartTime: time.Now(),
+	})
+
+	err = s.acquireSema(reqCtx, s.activeRequestsSema, req, rw, errMsgActiveReqSema)
+	if err != nil {
+		// Do not interrupt handling on semaphore timeouts.
+		return nil
+	}
+	defer func() { callOnError(s.activeRequestsSema.Release, recover(), err) }()
+
+	// The error returned by submitWG most likely means that the taskPool is
+	// closed, so return it to stop handling.
+	return s.taskPool.submitWG(s.activeTaskWG, func() {
+		defer s.handlePanicAndRecover(ctx)
+		defer reqCancel()
+		defer s.activeRequestsSema.Release()
+
+		_ = s.serveDNSMsg(reqCtx, req, rw)
 	})
 }
 
-// readUDPMsg reads the next incoming DNS message.
+// readUDPMsg reads the next incoming DNS message.  If the message is invalid,
+// all req, sess, and err are all nil.  conn must not be nil.
 func (s *ServerDNS) readUDPMsg(
 	ctx context.Context,
 	conn net.PacketConn,
-	buf []byte,
-) (n int, sess netext.PacketSession, err error) {
+) (req *dns.Msg, sess netext.PacketSession, err error) {
 	err = conn.SetReadDeadline(time.Now().Add(s.readTimeout))
 	if err != nil {
-		return 0, nil, err
+		return nil, nil, fmt.Errorf("setting deadline: %w", err)
 	}
 
-	n, sess, err = netext.ReadFromSession(conn, buf)
+	bufPtr := s.udpPool.Get()
+	defer s.udpPool.Put(bufPtr)
+
+	n, sess, err := netext.ReadFromSession(conn, *bufPtr)
 	if err != nil {
-		return 0, nil, err
+		return nil, nil, fmt.Errorf("reading from session: %w", err)
 	}
 
 	if n < DNSHeaderSize {
 		s.metrics.OnInvalidMsg(ctx)
 
-		return 0, nil, dns.ErrShortRead
+		return nil, nil, dns.ErrShortRead
 	}
 
-	return n, sess, nil
-}
-
-// udpResponseWriter is a ResponseWriter implementation for DNS-over-UDP.
-type udpResponseWriter struct {
-	respPool     *syncutil.Pool[[]byte]
-	udpSession   netext.PacketSession
-	conn         net.PacketConn
-	writeTimeout time.Duration
-	maxRespSize  uint16
-}
-
-// type check
-var _ ResponseWriter = (*udpResponseWriter)(nil)
-
-// LocalAddr implements the ResponseWriter interface for *udpResponseWriter.
-func (r *udpResponseWriter) LocalAddr() (addr net.Addr) {
-	// Don't use r.conn.LocalAddr(), since udpSession may actually contain the
-	// decoded OOB data, including the real local (dst) address.
-	return r.udpSession.LocalAddr()
-}
-
-// RemoteAddr implements the ResponseWriter interface for *udpResponseWriter.
-func (r *udpResponseWriter) RemoteAddr() (addr net.Addr) {
-	// Don't use r.conn.RemoteAddr(), since udpSession may actually contain the
-	// decoded OOB data, including the real remote (src) address.
-	return r.udpSession.RemoteAddr()
-}
-
-// WriteMsg implements the ResponseWriter interface for *udpResponseWriter.
-func (r *udpResponseWriter) WriteMsg(ctx context.Context, req, resp *dns.Msg) (err error) {
-	normalize(NetworkUDP, ProtoDNS, req, resp, r.maxRespSize)
-
-	bufPtr := r.respPool.Get()
-	defer func() {
-		if err != nil {
-			r.respPool.Put(bufPtr)
-		}
-	}()
-
-	b, err := resp.PackBuffer(*bufPtr)
+	req = &dns.Msg{}
+	err = req.Unpack((*bufPtr)[:n])
 	if err != nil {
-		return fmt.Errorf("udp: packing response: %w", err)
+		s.metrics.OnInvalidMsg(ctx)
+
+		// Do not interrupt handling on bad messages.
+		return nil, nil, nil
 	}
 
-	*bufPtr = b
-
-	withWriteDeadline(ctx, r.writeTimeout, r.conn, func() {
-		_, err = netext.WriteToSession(r.conn, b, r.udpSession)
-	})
-
-	if err != nil {
-		return &WriteError{
-			Err:      err,
-			Protocol: "udp",
-		}
-	}
-
-	return nil
+	return req, sess, nil
 }

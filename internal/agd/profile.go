@@ -54,10 +54,6 @@ type Profile struct {
 	// nil.
 	Ratelimiter Ratelimiter
 
-	// AccountID is the ID of the account that owns this profile.  It must not
-	// be empty and must be valid.
-	AccountID AccountID
-
 	// ID is the unique ID of this profile.  It must not be empty and must be
 	// valid.
 	ID ProfileID
@@ -65,6 +61,9 @@ type Profile struct {
 	// FilteredResponseTTL is the time-to-live value used for responses sent to
 	// the devices of this profile.
 	FilteredResponseTTL time.Duration
+
+	// AccountID is the ID of the account that owns this profile.
+	AccountID AccountID
 
 	// AutoDevicesEnabled shows if the automatic creation of devices using
 	// HumanIDs should be enabled for this profile.
@@ -95,6 +94,10 @@ type Profile struct {
 	// QueryLogEnabled defines whether query logs should be saved for the
 	// devices of this profile.
 	QueryLogEnabled bool
+
+	// QueryLogStream defines whether query logs should be streamed for the
+	// devices of this profile.
+	QueryLogStream bool
 }
 
 // ProfileID is the ID of a profile.  It is an opaque string.

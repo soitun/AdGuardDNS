@@ -26,6 +26,8 @@ type ServerMetricsListener struct {
 	errorCounters      *syncutil.OnceConstructor[dnsserver.ServerInfo, prometheus.Counter]
 	panicCounters      *syncutil.OnceConstructor[dnsserver.ServerInfo, prometheus.Counter]
 
+	reqActiveCounters *syncutil.OnceConstructor[dnsserver.ServerInfo, prometheus.Gauge]
+
 	reqDurationHistograms *syncutil.OnceConstructor[dnsserver.ServerInfo, prometheus.Observer]
 	reqSizeHistograms     *syncutil.OnceConstructor[dnsserver.ServerInfo, prometheus.Observer]
 	respSizeHistograms    *syncutil.OnceConstructor[dnsserver.ServerInfo, prometheus.Observer]
@@ -71,6 +73,7 @@ func NewServerMetricsListener(
 		panicTotalMtrcName      = "panic_total"
 		invalidMsgTotalMtrcName = "invalid_msg_total"
 		quicAddrLookupsMtrcName = "quic_addr_validation_lookups"
+		reqActiveMtrcName       = "request_active"
 	)
 
 	var (
@@ -143,6 +146,13 @@ func NewServerMetricsListener(
 			Help: "The number of QUIC address validation lookups." +
 				"hit=1 means that a cached item was found.",
 		}, []string{"hit"})
+
+		reqActive = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name:      reqActiveMtrcName,
+			Namespace: namespace,
+			Subsystem: subsystemServer,
+			Help:      "The number of requests currently being processed.",
+		}, []string{"name", "proto", "addr"})
 	)
 
 	var errs []error
@@ -173,6 +183,9 @@ func NewServerMetricsListener(
 	}, {
 		Key:   quicAddrLookupsMtrcName,
 		Value: quicAddrValidationCacheLookups,
+	}, {
+		Key:   reqActiveMtrcName,
+		Value: reqActive,
 	}}
 
 	for _, c := range collectors {
@@ -231,6 +244,12 @@ func NewServerMetricsListener(
 		respSizeHistograms: syncutil.NewOnceConstructor(
 			func(k dnsserver.ServerInfo) (o prometheus.Observer) {
 				return withSrvInfoLabelValues(responseSize, k)
+			},
+		),
+
+		reqActiveCounters: syncutil.NewOnceConstructor(
+			func(k dnsserver.ServerInfo) (g prometheus.Gauge) {
+				return withSrvInfoLabelValues(reqActive, k)
 			},
 		),
 	}, nil
@@ -302,4 +321,11 @@ func (l *ServerMetricsListener) OnQUICAddressValidation(hit bool) {
 	} else {
 		l.quicAddrValidationCacheLookupsMisses.Inc()
 	}
+}
+
+// AdjustActiveRequests implements the [dnsserver.MetricsListener] interface
+// for [*ServerMetricsListener].
+func (l *ServerMetricsListener) AdjustActiveRequests(ctx context.Context, num int) {
+	serverInfo := *dnsserver.MustServerInfoFromContext(ctx)
+	l.reqActiveCounters.Get(serverInfo).Add(float64(num))
 }

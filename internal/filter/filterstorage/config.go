@@ -10,6 +10,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/hashprefix"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/domain"
+	"github.com/AdguardTeam/AdGuardDNS/internal/filter/ruleliststorage"
 	"github.com/AdguardTeam/golibs/timeutil"
 	"github.com/c2h5oh/datasize"
 )
@@ -39,10 +40,6 @@ type Config struct {
 	// HashPrefix is the hashprefix-filter configuration for a default filter
 	// storage.  It must not be nil
 	HashPrefix *HashPrefixConfig
-
-	// RuleListsIndex is the rule-list index configuration for a default filter
-	// storage.  It must not be nil.
-	RuleListsIndex *IndexConfig
 
 	// SafeSearchGeneral is the general safe-search configuration for a default
 	// filter storage.  It must not be nil.
@@ -74,6 +71,9 @@ type Config struct {
 	// Metrics are the metrics for the filters in the storage.  It must not be
 	// nil.
 	Metrics filter.Metrics
+
+	// RuleListStorage is used to store rule lists.  It must not be nil.
+	RuleListStorage ruleliststorage.Storage
 
 	// CacheDir is the path to the directory where the cached filter files are
 	// put.  It must not be empty and the directory must exist.

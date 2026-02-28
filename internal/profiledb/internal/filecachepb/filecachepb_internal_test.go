@@ -9,6 +9,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/agd"
 	"github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal"
 	"github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/profiledbtest"
+	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -64,13 +65,16 @@ func BenchmarkCache(b *testing.B) {
 		require.NotEmpty(b, fileCache)
 	})
 
+	ctx := testutil.ContextWithTimeout(b, profiledbtest.Timeout)
 	b.Run("from_protobuf", func(b *testing.B) {
 		var gotCache *internal.FileCache
 
 		b.ReportAllocs()
 		for b.Loop() {
 			gotCache, err = toInternal(
+				ctx,
 				fileCache,
+				profiledbtest.Logger,
 				profiledbtest.Logger,
 				profiledbtest.ProfileAccessConstructor,
 				profiledbtest.RespSzEst,
@@ -108,9 +112,9 @@ func BenchmarkCache(b *testing.B) {
 	// goos: darwin
 	// goarch: arm64
 	// pkg: github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/filecachepb
-	// cpu: Apple M1 Pro
-	// BenchmarkCache/to_protobuf-8         	  553504	      2186 ns/op	    3240 B/op	      65 allocs/op
-	// BenchmarkCache/from_protobuf-8       	   49960	     24243 ns/op	   10096 B/op	      77 allocs/op
-	// BenchmarkCache/encode-8              	  456519	      2715 ns/op	     512 B/op	       1 allocs/op
-	// BenchmarkCache/decode-8              	  243376	      5100 ns/op	    3280 B/op	      81 allocs/op
+	// cpu: Apple M3
+	// BenchmarkCache/to_protobuf-8         	11022332	      1092 ns/op	    3192 B/op	      63 allocs/op
+	// BenchmarkCache/from_protobuf-8       	  611230	     19960 ns/op	   10016 B/op	      75 allocs/op
+	// BenchmarkCache/encode-8              	 7237903	      1672 ns/op	     512 B/op	       1 allocs/op
+	// BenchmarkCache/decode-8              	 4254238	      2848 ns/op	    3296 B/op	      81 allocs/op
 }

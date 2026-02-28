@@ -35,15 +35,9 @@ func ExampleNewServerDNS() {
 	conf := &dnsserver.ConfigDNS{
 		Base: &dnsserver.ConfigBase{
 			BaseLogger: baseLogger,
-
-			// server name
-			Name: "test",
-
-			// listen address
-			Addr: "127.0.0.1:0",
-
-			// handler that will process incoming DNS queries
-			Handler: handler,
+			Handler:    handler,
+			Name:       "test",
+			Addr:       "127.0.0.1:0",
 		},
 	}
 	srv := dnsserver.NewServerDNS(conf)
@@ -88,9 +82,9 @@ func ExampleWithMiddlewares() {
 	conf := &dnsserver.ConfigDNS{
 		Base: &dnsserver.ConfigBase{
 			BaseLogger: baseLogger.With("server_name", "test"),
+			Handler:    handler,
 			Name:       "test",
 			Addr:       "127.0.0.1:0",
-			Handler:    handler,
 		},
 	}
 	srv := dnsserver.NewServerDNS(conf)

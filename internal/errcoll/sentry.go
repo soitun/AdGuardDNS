@@ -17,7 +17,9 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/version"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
+	"github.com/AdguardTeam/golibs/requestid"
 	"github.com/getsentry/sentry-go"
+	"github.com/quic-go/quic-go"
 	"golang.org/x/sys/unix"
 )
 
@@ -103,6 +105,8 @@ func isReportable(err error) (ok bool) {
 		return isReportableNetwork(fwdErr.Err)
 	} else if errors.As(err, &dnsWErr) {
 		switch dnsWErr.Protocol {
+		case "quic":
+			return isReportableWriteQUIC(dnsWErr.Err)
 		case "tcp":
 			return isReportableWriteTCP(dnsWErr.Err)
 		case "udp":
@@ -125,6 +129,47 @@ func isReportableNetwork(err error) (ok bool) {
 	var netErr net.Error
 
 	return errors.As(err, &netErr) && !netErr.Timeout()
+}
+
+// isReportableWriteQUIC returns true if err is a QUIC error that should be
+// reported.
+func isReportableWriteQUIC(err error) (ok bool) {
+	if isConnectionBreak(err) {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+
+	if errors.Is(err, quic.ErrServerClosed) {
+		return false
+	}
+
+	var streamErr *quic.StreamError
+	if errors.As(err, &streamErr) {
+		// Only report local stream errors.
+		return !streamErr.Remote
+	}
+
+	// Catch quic-go's IdleTimeoutError.  This error is returned from
+	// [quic.Conn.AcceptStream] calls and this is an expected outcome, happens
+	// all the time with different QUIC clients.
+	var idleTimeoutErr *quic.IdleTimeoutError
+	if errors.As(err, &idleTimeoutErr) {
+		return false
+	}
+
+	// Catch quic-go's ApplicationError with error code 0.  This error is
+	// returned from quic-go methods when the client closes the connection.
+	// This is an expected situation, and it's not necessary to log it.
+	var qAppErr *quic.ApplicationError
+	if errors.As(err, &qAppErr) && qAppErr.ErrorCode == 0 {
+		return false
+	}
+
+	return true
 }
 
 // isReportableWriteTCP returns true if err is a TCP or TLS error that should be
@@ -191,20 +236,19 @@ func tagsFromCtx(ctx context.Context) (tags sentryTags) {
 	}
 
 	// TODO(a.garipov):  Consider splitting agdctx package.
-	var reqID agd.RequestID
+	var reqID requestid.ID
 	if ri, ok := agd.RequestInfoFromContext(ctx); ok {
 		tags["filtering_group_id"] = string(ri.FilteringGroup.ID)
-		tags["request_id"] = ri.ID.String()
 
 		p, d := ri.DeviceData()
 		if p != nil {
 			tags["profile_id"] = string(p.ID)
 			tags["device_id"] = string(d.ID)
 		}
-	} else if reqID, ok = agd.RequestIDFromContext(ctx); ok {
+	} else if reqID, ok = requestid.IDFromContext(ctx); ok {
 		// This context could be from the part of the pipeline where the request
 		// ID hasn't yet been resurfaced.
-		tags["request_id"] = reqID.String()
+		tags["request_id"] = string(reqID)
 	}
 
 	if si, ok := dnsserver.ServerInfoFromContext(ctx); ok {

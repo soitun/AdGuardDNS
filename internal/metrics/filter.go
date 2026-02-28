@@ -89,7 +89,7 @@ func (m *Filter) SetFilterStatus(
 	_ context.Context,
 	id string,
 	updTime time.Time,
-	ruleCount int,
+	ruleCount uint64,
 	err error,
 ) {
 	if err != nil {

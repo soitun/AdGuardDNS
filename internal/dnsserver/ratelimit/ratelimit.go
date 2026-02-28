@@ -143,7 +143,7 @@ func (mh *mwHandler) ServeDNS(
 		return err
 	}
 
-	resp := nwrw.Msg()
+	resp := nwrw.Resp()
 	if resp == nil {
 		return nil
 	}

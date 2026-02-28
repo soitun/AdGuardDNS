@@ -1,4 +1,4 @@
-package filterstorage
+package ruleliststorage
 
 import (
 	"slices"

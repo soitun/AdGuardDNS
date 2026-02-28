@@ -68,7 +68,7 @@ func (mw *Middleware) serveWithGlobalRatelimiting(
 		return err
 	}
 
-	resp := nwrw.Msg()
+	resp := nwrw.Resp()
 	if resp == nil {
 		return nil
 	}
@@ -124,7 +124,7 @@ func (mw *Middleware) serveWithProfileRatelimiting(
 		return true, fmt.Errorf("serving: %w", err)
 	}
 
-	resp := nwrw.Msg()
+	resp := nwrw.Resp()
 	if resp == nil {
 		return true, nil
 	}

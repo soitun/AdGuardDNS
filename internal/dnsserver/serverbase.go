@@ -22,6 +22,8 @@ import (
 //
 // TODO(a.garipov):  Consider splitting and adding appropriate fields to the
 // configs of the separate server types.
+//
+// TODO(a.garipov):  Add and use [timeutil.Clock].
 type ConfigBase struct {
 	// BaseLogger is used to create loggers for servers and requests.  It should
 	// contain the name of the server.  If BaseLogger is nil, [slog.Default] is
@@ -34,25 +36,30 @@ type ConfigBase struct {
 	//   - "req_id": the 16-bit ID of the message as set by the client.
 	BaseLogger *slog.Logger
 
-	// Handler processes incoming DNS messages.  If not set, the default
-	// handler, which returns error responses to all queries, is used.
-	Handler Handler
-
-	// Metrics is the object we use for collecting performance metrics.  If not
-	// set, [EmptyMetricsListener] is used.
-	Metrics MetricsListener
+	// ActiveRequestsSemaphore allows limiting the number of requests processed
+	// simultaneously.  If nil, [syncutil.EmptySemaphore] is used, meaning there
+	// is no limit.
+	ActiveRequestsSemaphore syncutil.Semaphore
 
 	// Disposer is used to help module users reuse parts of DNS responses.  If
 	// not set, [EmptyDisposer] is used.
 	Disposer Disposer
 
-	// RequestContext is a context constructor that returns contexts for
-	// requests.  If not set, the server uses [contextutil.EmptyConstructor].
-	RequestContext contextutil.Constructor
+	// Handler processes incoming DNS messages.  If not set, the default
+	// handler, which returns error responses to all queries, is used.
+	Handler Handler
 
 	// ListenConfig, when set, is used to set options of connections used by the
 	// DNS server.  If nil, an appropriate default ListenConfig is used.
 	ListenConfig netext.ListenConfig
+
+	// Metrics is the object we use for collecting performance metrics.  If not
+	// set, [EmptyMetricsListener] is used.
+	Metrics MetricsListener
+
+	// RequestContext is a context constructor that returns contexts for
+	// requests.  If not set, the server uses [contextutil.EmptyConstructor].
+	RequestContext contextutil.Constructor
 
 	// Network is the network this server listens to.  If empty, the server will
 	// listen to all networks that are supposed to be used by the server's
@@ -91,6 +98,9 @@ type ServerBase struct {
 
 	// listenConfig is used to set tcpListener and udpListener.
 	listenConfig netext.ListenConfig
+
+	// activeRequestsSema controls the number of goroutines processing requests.
+	activeRequestsSema syncutil.Semaphore
 
 	// mu protects started, tcpListener, and udpListener.
 	mu *sync.RWMutex
@@ -152,8 +162,12 @@ func newServerBase(proto Protocol, c *ConfigBase) (s *ServerBase) {
 			c.RequestContext,
 			contextutil.EmptyConstructor{},
 		),
-		metrics:      cmp.Or[MetricsListener](c.Metrics, EmptyMetricsListener{}),
-		disposer:     cmp.Or[Disposer](c.Disposer, EmptyDisposer{}),
+		metrics:  cmp.Or[MetricsListener](c.Metrics, EmptyMetricsListener{}),
+		disposer: cmp.Or[Disposer](c.Disposer, EmptyDisposer{}),
+		activeRequestsSema: cmp.Or[syncutil.Semaphore](
+			c.ActiveRequestsSemaphore,
+			syncutil.EmptySemaphore{},
+		),
 		listenConfig: c.ListenConfig,
 		mu:           &sync.RWMutex{},
 		activeTaskWG: &sync.WaitGroup{},
@@ -212,43 +226,16 @@ func (s *ServerBase) LocalUDPAddr() (addr net.Addr) {
 	return nil
 }
 
-// requestContext returns a context for one request and adds server information.
-func (s *ServerBase) requestContext(
-	parent context.Context,
-) (ctx context.Context, cancel context.CancelFunc) {
-	ctx, cancel = s.reqCtx.New(parent)
-	ctx = ContextWithServerInfo(ctx, &ServerInfo{
-		Name:  s.name,
-		Addr:  s.addr,
-		Proto: s.proto,
-	})
-
-	return ctx, cancel
-}
-
-// serveDNS processes the incoming DNS query and writes the response to the
-// specified ResponseWriter.  written is false if no response was written.
-func (s *ServerBase) serveDNS(ctx context.Context, buf []byte, rw ResponseWriter) (written bool) {
-	req := &dns.Msg{}
-	if err := req.Unpack(buf); err != nil {
-		// Ignore the incoming message and let the connection hang as it may be
-		// used to amplify.
-		s.metrics.OnInvalidMsg(ctx)
-
-		return false
-	}
-
-	return s.serveDNSMsg(ctx, req, rw)
-}
-
-// serveDNSMsg processes the incoming DNS query and writes the response to the
-// specified ResponseWriter.  req and rw must not be nil.  written is false if
-// no response was written.
+// serveDNSMsg processes the incoming DNS query and writes the response to rw.
+// req and rw must not be nil.
 func (s *ServerBase) serveDNSMsg(
 	ctx context.Context,
 	req *dns.Msg,
 	rw ResponseWriter,
 ) (written bool) {
+	s.metrics.AdjustActiveRequests(ctx, 1)
+	defer s.metrics.AdjustActiveRequests(ctx, -1)
+
 	attrsPtr := s.newAttrsSlicePtr(req, rw.RemoteAddr().String())
 	defer s.attrPool.Put(attrsPtr)
 
@@ -261,7 +248,7 @@ func (s *ServerBase) serveDNSMsg(
 	ctx = slogutil.ContextWithLogger(ctx, logger)
 
 	recW := NewRecorderResponseWriter(rw)
-	s.serveDNSMsgInternal(ctx, logger, req, recW)
+	s.serveDNS(ctx, logger, req, recW)
 
 	resp := recW.Resp
 	written = resp != nil
@@ -322,13 +309,15 @@ func questionData(m *dns.Msg) (hostname, qType string) {
 
 // dispose is a helper for disposing a DNS response right after writing it to a
 // connection.  Disposal of a response is only safe assuming that there is no
-// further processing up the stack.  Currently, this is only true for plain DNS
-// and DoT at this point in the code.
-//
-// TODO(a.garipov): Add DoQ as well once the legacy format is removed.
+// further processing up the stack.  Currently, this is only true for:
+//   - DoQ,
+//   - DoT,
+//   - plain DNS.
 func (s *ServerBase) dispose(rw ResponseWriter, resp *dns.Msg) {
+	// TODO(a.garipov):  Use interfaces instead.
 	switch rw.(type) {
 	case
+		*quicResponseWriter,
 		*tcpResponseWriter,
 		*udpResponseWriter:
 		s.disposer.Dispose(resp)
@@ -337,16 +326,11 @@ func (s *ServerBase) dispose(rw ResponseWriter, resp *dns.Msg) {
 	}
 }
 
-// serveDNSMsgInternal serves the DNS request and uses recorder as a
-// [ResponseWriter].  This method is supposed to be called from serveDNSMsg, the
-// recorded response is used for counting metrics.  logger, req, and rw must not
-// be nil.
-//
-// TODO(a.garipov):  Think of a better name or refactor its connections to other
-// methods.
-func (s *ServerBase) serveDNSMsgInternal(
+// serveDNS serves the DNS request and records the response to rw.  All
+// arguments must not be nil.
+func (s *ServerBase) serveDNS(
 	ctx context.Context,
-	logger *slog.Logger,
+	l *slog.Logger,
 	req *dns.Msg,
 	rw *RecorderResponseWriter,
 ) {
@@ -355,13 +339,13 @@ func (s *ServerBase) serveDNSMsgInternal(
 	// Check if we can accept this message.
 	switch action, reason := s.acceptMsg(req); action {
 	case dns.MsgReject:
-		logger.DebugContext(ctx, "rejected", "reason", reason)
+		l.DebugContext(ctx, "rejected", "reason", reason)
 		resp = genErrorResponse(req, dns.RcodeFormatError)
 	case dns.MsgRejectNotImplemented:
-		logger.DebugContext(ctx, "not implemented", "reason", reason)
+		l.DebugContext(ctx, "not implemented", "reason", reason)
 		resp = genErrorResponse(req, dns.RcodeNotImplemented)
 	case dns.MsgIgnore:
-		logger.DebugContext(ctx, "ignoring", "reason", reason)
+		l.DebugContext(ctx, "ignoring", "reason", reason)
 		s.metrics.OnInvalidMsg(ctx)
 
 		return
@@ -370,10 +354,10 @@ func (s *ServerBase) serveDNSMsgInternal(
 	// If resp is not empty at this stage, the request is invalid and we should
 	// simply exit here.
 	if resp != nil {
-		logger.DebugContext(ctx, "writing response", "rcode", resp.Rcode)
+		l.DebugContext(ctx, "writing response", "rcode", resp.Rcode)
 		err := rw.WriteMsg(ctx, req, resp)
 		if err != nil {
-			logger.DebugContext(ctx, "error writing reject response", slogutil.KeyError, err)
+			l.DebugContext(ctx, "error writing reject response", slogutil.KeyError, err)
 		}
 
 		return
@@ -381,18 +365,42 @@ func (s *ServerBase) serveDNSMsgInternal(
 
 	err := s.handler.ServeDNS(ctx, rw, req)
 	if err != nil {
-		logger.DebugContext(ctx, "handler error", slogutil.KeyError, err)
+		const msg = "handler error"
+		if rw.Resp != nil {
+			l.DebugContext(ctx, msg, slogutil.KeyError, err)
+		} else {
+			s.respondWithError(ctx, l, msg, req, rw, err)
+		}
+
 		s.metrics.OnError(ctx, err)
+	}
+}
 
-		resp = genErrorResponse(req, dns.RcodeServerFailure)
-		if isNonCriticalNetError(err) {
-			addEDE(req, resp, dns.ExtendedErrorCodeNetworkError, "")
-		}
+// respondWithError logs the error, generates an error response, and writes it.
+// msg is the logging message.  rw should not have been written to.  All
+// arguments must not be empty.
+func (s *ServerBase) respondWithError(
+	ctx context.Context,
+	l *slog.Logger,
+	msg string,
+	req *dns.Msg,
+	rw ResponseWriter,
+	reportedError error,
+) {
+	l.DebugContext(ctx, msg, slogutil.KeyError, reportedError)
 
-		err = rw.WriteMsg(ctx, req, resp)
-		if err != nil {
-			logger.DebugContext(ctx, "error writing handler response", slogutil.KeyError, err)
-		}
+	resp := genErrorResponse(req, dns.RcodeServerFailure)
+	if isNonCriticalNetError(reportedError) {
+		addEDE(req, resp, dns.ExtendedErrorCodeNetworkError, "")
+	}
+
+	err := rw.WriteMsg(ctx, req, resp)
+	if err != nil {
+		const errMsg = "writing error response"
+		err = fmt.Errorf(errMsg+": %w", err)
+
+		s.metrics.OnError(ctx, err)
+		l.DebugContext(ctx, errMsg, slogutil.KeyError, err)
 	}
 }
 
@@ -571,4 +579,27 @@ func (s *ServerBase) isStarted() (started bool) {
 	defer s.mu.RUnlock()
 
 	return s.started
+}
+
+// errMsgActiveReqSema is the common error message for errors arising during
+// the acquisition of [ServerBase.activeRequestsSema].
+const errMsgActiveReqSema = "acquiring active requests semaphore"
+
+// acquireSema is a helper method that acquires sema and, if it is unable to do
+// so, writes an error to rw.  All arguments must not be nil.
+func (s *ServerBase) acquireSema(
+	ctx context.Context,
+	sema syncutil.Semaphore,
+	req *dns.Msg,
+	rw ResponseWriter,
+	msg string,
+) (err error) {
+	err = sema.Acquire(ctx)
+	if err == nil {
+		return nil
+	}
+
+	s.respondWithError(ctx, s.baseLogger, msg, req, rw, err)
+
+	return fmt.Errorf(msg+": %w", err)
 }

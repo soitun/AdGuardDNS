@@ -170,7 +170,7 @@ func TestPreServiceMwHandler_ServeDNS(t *testing.T) {
 			err = h.ServeDNS(tctx, rw, tc.req)
 			require.NoError(t, err)
 
-			msg := rw.Msg()
+			msg := rw.Resp()
 			require.NotNil(t, msg)
 
 			assert.Equal(t, tc.wantAns, msg.Answer)

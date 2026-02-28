@@ -134,7 +134,7 @@ func TestRatelimitMiddleware(t *testing.T) {
 				err = withMw.ServeDNS(ctx, nrw, tc.req)
 				require.NoError(t, err)
 
-				if nrw.Msg() != nil {
+				if nrw.Resp() != nil {
 					n++
 				}
 			}

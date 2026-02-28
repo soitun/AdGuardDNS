@@ -16,6 +16,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/errcoll"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/netutil/urlutil"
+	"github.com/AdguardTeam/golibs/requestid"
 	"github.com/AdguardTeam/golibs/service"
 )
 
@@ -76,6 +77,11 @@ func (upd *AllowlistUpdater) Refresh(ctx context.Context) (err error) {
 	defer upd.logger.InfoContext(ctx, "refresh finished")
 
 	defer func() { upd.metrics.SetStatus(ctx, err) }()
+
+	_, ok := requestid.IDFromContext(ctx)
+	if !ok {
+		ctx = requestid.ContextWithRequestID(ctx, requestid.New())
+	}
 
 	consulNets, err := upd.loadConsul(ctx)
 	if err != nil {

@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"runtime"
 
-	"github.com/AdguardTeam/AdGuardDNS/internal/agd"
 	"github.com/AdguardTeam/AdGuardDNS/internal/cmd/plugin"
 	"github.com/AdguardTeam/AdGuardDNS/internal/experiment"
 	"github.com/AdguardTeam/AdGuardDNS/internal/metrics"
@@ -66,6 +65,12 @@ func Main(plugins *plugin.Registry) {
 	defer reportPanics(ctx, errColl, mainLogger)
 
 	setMaxThreads(ctx, mainLogger, envs.MaxThreads)
+	setLockingEventsRate(
+		ctx,
+		mainLogger,
+		envs.BlockProfileRateDenominator,
+		envs.MutexProfileRateDenominator,
+	)
 
 	c := errors.Must(parseConfig(envs.ConfPath))
 
@@ -94,11 +99,13 @@ func Main(plugins *plugin.Registry) {
 
 	b.startGeoIP(ctx)
 
-	errors.Check(os.MkdirAll(envs.FilterCachePath, agd.DefaultDirPerm))
+	errors.Check(сreateFilterCacheDirs(envs.FilterCacheDir))
 
 	errors.Check(b.initMsgCloner(ctx))
 
 	errors.Check(b.initHashPrefixFilters(ctx))
+
+	errors.Check(b.initRuleListStorage(ctx))
 
 	errors.Check(b.initFilterStorage(ctx))
 

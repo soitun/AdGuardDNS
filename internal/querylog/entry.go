@@ -41,11 +41,6 @@ type Entry struct {
 	// DomainFQDN is the fully-qualified name of the requested resource.
 	DomainFQDN string
 
-	// RequestID is the ID of the request.
-	//
-	// TODO(a.garipov): Remove once not necessary anymore.
-	RequestID agd.RequestID
-
 	// Elapsed is the time passed since the beginning of the request processing.
 	Elapsed time.Duration
 
@@ -59,11 +54,17 @@ type Entry struct {
 	// ResponseCode is the response code sent to the client.
 	ResponseCode dnsmsg.RCode
 
+	// AccountID is the detected account ID, if any.
+	AccountID agd.AccountID
+
 	// Protocol is the DNS protocol used.
 	Protocol agd.Protocol
 
 	// DNSSEC is set to true if the response was validated with DNSSEC.
 	DNSSEC bool
+
+	// Stream is set to true if this log must be streamed.
+	Stream bool
 }
 
 // resultCode is the code that identifies the code of actions performed for
@@ -143,11 +144,6 @@ type jsonlEntry struct {
 	// zero structs.  See https://github.com/golang/go/issues/11939.
 	RemoteIP *netip.Addr `json:"ip,omitempty"`
 
-	// RequestID is the ID of the request.
-	//
-	// The short name "u" stands for "unique".
-	RequestID string `json:"u"`
-
 	// ProfileID is the detected profile ID, if any.
 	//
 	// The short name "b" stands for "buyer".
@@ -209,6 +205,11 @@ type jsonlEntry struct {
 	// The short name "e" stands for "elapsed".
 	Elapsed uint32 `json:"e"`
 
+	// AccountID is the detected account ID, if any.
+	//
+	// The short name "ac" stands for "account".
+	AccountID agd.AccountID `json:"ac"`
+
 	// RequestType is the type of the resource record of the query.
 	//
 	// The short name "q" stands for "question".
@@ -235,6 +236,12 @@ type jsonlEntry struct {
 	//
 	// The short name "s" stands for "secure".
 	DNSSEC uint8 `json:"s"`
+
+	// Stream is 1 if the response must be streamed and 0 otherwise. It is a
+	// number and not a boolean to save space in the resulting JSON
+	//
+	// The short name "st" stands for "stream".
+	Stream uint8 `json:"st"`
 
 	// Protocol is the DNS protocol used.
 	//

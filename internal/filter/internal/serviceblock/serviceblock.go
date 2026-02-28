@@ -101,7 +101,7 @@ func (f *Filter) Refresh(
 	useCache bool,
 	acceptStale bool,
 ) (err error) {
-	var count int
+	var count uint64
 	defer func() {
 		// TODO(a.garipov):  Consider using [agdtime.Clock].
 		f.metrics.SetFilterStatus(ctx, string(filter.IDBlockedService), time.Now(), count, err)

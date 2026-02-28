@@ -144,7 +144,7 @@ func (p *HumanIDParser) ParseNormalized(s string) (id HumanID, err error) {
 	}
 
 	buf := p.pool.Get()
-	defer func() { p.pool.Put(buf) }()
+	defer p.pool.Put(buf)
 
 	buf.Reset()
 	n := humanIDNormalizer{

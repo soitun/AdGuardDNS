@@ -124,13 +124,13 @@ func (f *Refreshable) Refresh(ctx context.Context, acceptStale bool) (err error)
 
 	f.engine = urlfilter.NewDNSEngine(s)
 
-	f.logger.InfoContext(ctx, "reset rules", "num", f.engine.RulesCount)
+	f.logger.InfoContext(ctx, "reset rules", "num", f.engine.RulesCount())
 
 	return nil
 }
 
 // RulesCount returns the number of rules in the filter's engine.
-func (f *Refreshable) RulesCount() (n int) {
+func (f *Refreshable) RulesCount() (n uint64) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 

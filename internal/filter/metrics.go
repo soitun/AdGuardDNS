@@ -16,7 +16,7 @@ type Metrics interface {
 		ctx context.Context,
 		id string,
 		updTime time.Time,
-		ruleCount int,
+		ruleCount uint64,
 		err error,
 	)
 }
@@ -29,4 +29,4 @@ type EmptyMetrics struct{}
 var _ Metrics = EmptyMetrics{}
 
 // SetFilterStatus implements the [Metrics] interface for EmptyMetrics.
-func (EmptyMetrics) SetFilterStatus(_ context.Context, _ string, _ time.Time, _ int, _ error) {}
+func (EmptyMetrics) SetFilterStatus(_ context.Context, _ string, _ time.Time, _ uint64, _ error) {}

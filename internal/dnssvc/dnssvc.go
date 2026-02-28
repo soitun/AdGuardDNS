@@ -158,19 +158,20 @@ func newListeners(
 				"listener_name", name,
 				slogutil.KeyPrefix, "dnsserver",
 			),
-			Network:        dnsserver.NetworkAny,
-			Handler:        handler,
-			Metrics:        errCollListener,
-			Disposer:       c.Cloner,
-			RequestContext: newContextConstructor(c.HandleTimeout),
+			ActiveRequestsSemaphore: c.ActiveRequestsSemaphore,
+			Disposer:                c.Cloner,
+			Handler:                 handler,
 			ListenConfig: newListenConfig(
 				bindData.ListenConfig,
 				c.ControlConf,
 				c.ConnLimiter,
 				proto,
 			),
-			Name: name,
-			Addr: addr,
+			Metrics:        errCollListener,
+			RequestContext: newContextConstructor(c.HandleTimeout),
+			Network:        dnsserver.NetworkAny,
+			Name:           name,
+			Addr:           addr,
 		}
 
 		l := &listener{

@@ -7,6 +7,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/custom"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/filtertest"
+	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/urlfilter"
 	"github.com/miekg/dns"
@@ -59,10 +60,10 @@ func TestFilter(t *testing.T) {
 			t.Parallel()
 
 			req := &urlfilter.DNSRequest{
-				ClientIP:   filtertest.IPv4Client,
-				ClientName: tc.cliName,
-				Hostname:   tc.host,
-				DNSType:    dns.TypeA,
+				ClientIP:          filtertest.IPv4Client,
+				ClientIdentifiers: container.NewSortedSliceSet(tc.cliName),
+				Hostname:          tc.host,
+				DNSType:           dns.TypeA,
 			}
 			res := &urlfilter.DNSResult{}
 

@@ -159,7 +159,7 @@ func (db *CustomDomainDB) AddCertificate(
 	if !state.Enabled {
 		l.DebugContext(ctx, "certificate is disabled")
 
-		db.removeCertData(ctx, l, certName, profID, domains, "stale")
+		db.removeCertData(ctx, l, certName, profID, domains, "disabled")
 
 		return
 	}
@@ -354,24 +354,7 @@ var _ service.Refresher = (*CustomDomainDB)(nil)
 // Refresh implements the [service.Refresher] interface for *CustomDomainDB.
 // Refresh will retry network and ratelimiting errors.
 func (db *CustomDomainDB) Refresh(ctx context.Context) (err error) {
-	var updatedCertNames []agd.CertificateName
-	retries := map[agd.CertificateName]*customDomainRetry{}
-	func() {
-		db.customCertsMu.Lock()
-		defer db.customCertsMu.Unlock()
-
-		updatedCertNames = slices.Clone(db.customCerts.changed.Values())
-		db.customCerts.changed.Clear()
-
-		maps.Copy(retries, db.customCerts.retries)
-		clear(db.customCerts.retries)
-	}()
-
-	if len(updatedCertNames) == 0 && len(retries) == 0 {
-		db.logger.Log(ctx, slogutil.LevelTrace, "no certs to update or retry")
-
-		return nil
-	}
+	updatedCertNames, retries := db.resetIndexUpdates()
 
 	defer func() {
 		db.customCertsMu.Lock()
@@ -395,6 +378,8 @@ func (db *CustomDomainDB) Refresh(ctx context.Context) (err error) {
 		}
 	}
 
+	db.removeStaleCerts(ctx, now)
+
 	err = errors.Join(errs...)
 	if err != nil {
 		errcoll.Collect(ctx, db.errColl, db.logger, "refreshing certs", err)
@@ -405,6 +390,25 @@ func (db *CustomDomainDB) Refresh(ctx context.Context) (err error) {
 	db.performRetries(ctx, retries, now)
 
 	return nil
+}
+
+// resetIndexUpdates resets the names of updated certificates and the retries
+// data and returns the previous values.
+func (db *CustomDomainDB) resetIndexUpdates() (
+	updated []agd.CertificateName,
+	retries map[agd.CertificateName]*customDomainRetry,
+) {
+	db.customCertsMu.Lock()
+	defer db.customCertsMu.Unlock()
+
+	updated = slices.Clone(db.customCerts.changed.Values())
+	db.customCerts.changed.Clear()
+
+	retries = make(map[agd.CertificateName]*customDomainRetry, len(db.customCerts.retries))
+	maps.Copy(retries, db.customCerts.retries)
+	clear(db.customCerts.retries)
+
+	return updated, retries
 }
 
 // refreshCert obtains the data for the certificate with the given name,
@@ -616,6 +620,33 @@ func (db *CustomDomainDB) addRetry(
 	}
 
 	retry.next = now.Add(retry.sched.UntilNext(now))
+}
+
+// removeStaleCerts removes certificates that are no longer valid.
+func (db *CustomDomainDB) removeStaleCerts(ctx context.Context, now time.Time) {
+	staleItems := db.staleIndexItems(now)
+	for _, it := range staleItems {
+		l := db.logger.With("cert_name", it.certName, "prof_id", it.profileID)
+		domains := []string{it.domain}
+		db.removeCertData(ctx, l, it.certName, it.profileID, domains, "refresh_gc")
+	}
+}
+
+// staleIndexItems returns the items of db.customDomainIndex that need to be
+// removed, because they are stale.  stale must not be modified.
+func (db *CustomDomainDB) staleIndexItems(now time.Time) (stale []*customDomainIndexItem) {
+	db.customCertsMu.RLock()
+	defer db.customCertsMu.RUnlock()
+
+	for _, items := range db.customCerts.data {
+		for _, it := range items {
+			if now.After(it.notAfter) {
+				stale = append(stale, it)
+			}
+		}
+	}
+
+	return stale
 }
 
 // performRetries refreshes the certs that have failed previously.  All errors

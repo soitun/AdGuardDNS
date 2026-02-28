@@ -58,7 +58,7 @@ func (s *ServerDNS) serveTCP(ctx context.Context, l net.Listener, proto string) 
 
 // acceptTCPConn reads and starts processing a single TCP connection.
 //
-// NOTE: Any error returned from this method stops handling on l.
+// NOTE:  Any error returned from this method stops handling on l.
 func (s *ServerDNS) acceptTCPConn(ctx context.Context, l net.Listener) (err error) {
 	conn, err := l.Accept()
 	if err != nil {
@@ -70,7 +70,7 @@ func (s *ServerDNS) acceptTCPConn(ctx context.Context, l net.Listener) (err erro
 
 		return err
 	}
-	// Don't defer the close because it's deferred in serveTCPConn.
+	defer func() { closeOnError(ctx, s.baseLogger, conn, recover(), err) }()
 
 	func() {
 		s.tcpConnsMu.Lock()
@@ -80,7 +80,11 @@ func (s *ServerDNS) acceptTCPConn(ctx context.Context, l net.Listener) (err erro
 		s.tcpConns.Add(conn)
 	}()
 
+	// The error returned by submitWG most likely means that the taskPool is
+	// closed, so return it to stop handling.
 	return s.taskPool.submitWG(s.activeTaskWG, func() {
+		defer s.handlePanicAndRecover(ctx)
+
 		s.serveTCPConn(ctx, conn)
 	})
 }
@@ -107,11 +111,8 @@ func handshake(conn net.Conn, timeout time.Duration) (err error) {
 	return shaker.HandshakeContext(ctx)
 }
 
-// serveTCPConn serves a single TCP connection.  It is intended to be used as a
-// goroutine.  conn must not be nil.
+// serveTCPConn serves a single TCP connection.  conn must not be nil.
 func (s *ServerDNS) serveTCPConn(ctx context.Context, conn net.Conn) {
-	defer s.handlePanicAndRecover(ctx)
-
 	connWG := &sync.WaitGroup{}
 	defer func() {
 		connWG.Wait()
@@ -143,7 +144,7 @@ func (s *ServerDNS) serveTCPConn(ctx context.Context, conn net.Conn) {
 	}
 
 	for s.isStarted() {
-		err = s.acceptTCPMsg(conn, connWG, writeMu, timeout, msgSema)
+		err = s.acceptTCPMsg(ctx, conn, connWG, writeMu, timeout, msgSema)
 		if err != nil {
 			s.logReadErr(ctx, "reading from conn", err)
 
@@ -165,19 +166,89 @@ func (s *ServerDNS) logReadErr(ctx context.Context, msg string, err error) {
 	s.baseLogger.DebugContext(ctx, msg, slogutil.KeyError, err)
 }
 
+// tlsConnectionStater is a common interface for connections that can return
+// a TLS connection state.
+type tlsConnectionStater interface {
+	ConnectionState() tls.ConnectionState
+}
+
 // acceptTCPMsg reads and starts processing a single TCP message.  If conn is a
-// TLS connection, the handshake must have already been performed.
+// TLS connection, the handshake must have already been performed.  All
+// arguments must not be empty.
+//
+// NOTE:  Any error returned from this method stops handling on conn.
 func (s *ServerDNS) acceptTCPMsg(
+	ctx context.Context,
 	conn net.Conn,
 	connWG *sync.WaitGroup,
 	writeMu *sync.Mutex,
 	timeout time.Duration,
 	msgSema syncutil.Semaphore,
 ) (err error) {
-	bufPtr, err := s.readTCPMsg(conn, timeout)
+	req, err := s.readTCPMsg(ctx, conn, timeout)
 	if err != nil {
-		return err
+		// Likely an idle timeout or a bad message.
+		//
+		// TODO(a.garipov):  Consider not interrupting the conn handling on bad
+		// messages.
+		return fmt.Errorf("reading tcp message: %w", err)
 	}
+
+	reqCtx, reqCancel := s.newContextForTCPReq(ctx, conn)
+	defer func() { callOnError(reqCancel, recover(), err) }()
+
+	rw := s.newTCPRW(writeMu, conn)
+	err = s.acquireSema(reqCtx, s.activeRequestsSema, req, rw, errMsgActiveReqSema)
+	if err != nil {
+		// Do not interrupt handling on semaphore timeouts.
+		return nil
+	}
+	defer func() { callOnError(s.activeRequestsSema.Release, recover(), err) }()
+
+	err = s.acquireSema(reqCtx, msgSema, req, rw, "acquiring pipeline semaphore")
+	if err != nil {
+		// Do not interrupt handling on semaphore timeouts.
+		return nil
+	}
+	defer func() { callOnError(msgSema.Release, recover(), err) }()
+
+	// The error returned by submitWG most likely means that the taskPool is
+	// closed, so return it to stop handling.
+	return s.taskPool.submitWG(connWG, func() {
+		defer s.handlePanicAndRecover(reqCtx)
+		defer reqCancel()
+		defer msgSema.Release()
+		defer s.activeRequestsSema.Release()
+
+		written := s.serveDNSMsg(reqCtx, req, rw)
+		if !written {
+			// Nothing has been written, so close the connection in order to
+			// avoid hanging connections.  That can happen when the handler
+			// rate-limited a connection or if garbage data has been received.
+			slogutil.CloseAndLog(ctx, s.baseLogger, conn, slog.LevelDebug)
+		}
+	})
+}
+
+// newTCPRW returns a new TCP response writer for a request.  All arguments must
+// not be nil.
+func (s *ServerDNS) newTCPRW(writeMu *sync.Mutex, conn net.Conn) (rw *tcpResponseWriter) {
+	return &tcpResponseWriter{
+		respPool:     s.respPool,
+		writeMu:      writeMu,
+		conn:         conn,
+		writeTimeout: s.writeTimeout,
+		idleTimeout:  s.tcpIdleTimeout,
+	}
+}
+
+// newContextForTCPReq returns a new context for a TCP request.  All arguments
+// must not be nil.
+func (s *ServerDNS) newContextForTCPReq(
+	parent context.Context,
+	conn net.Conn,
+) (ctx context.Context, cancel context.CancelFunc) {
+	ctx, cancel = s.reqCtx.New(context.WithoutCancel(parent))
 
 	ri := &RequestInfo{
 		StartTime: time.Now(),
@@ -187,80 +258,48 @@ func (s *ServerDNS) acceptTCPMsg(
 		ri.TLS = &tlsConnState
 	}
 
-	reqCtx, reqCancel := s.requestContext(context.Background())
-	reqCtx = ContextWithRequestInfo(reqCtx, ri)
+	ctx = ContextWithRequestInfo(ctx, ri)
 
-	err = msgSema.Acquire(reqCtx)
-	if err != nil {
-		return fmt.Errorf("waiting for sema: %w", err)
-	}
-
-	// RFC 7766 recommends implementing query pipelining, i.e. process all
-	// incoming queries concurrently and write responses out of order.
-	return s.taskPool.submitWG(connWG, func() {
-		defer reqCancel()
-		defer msgSema.Release()
-
-		s.serveTCPMessage(reqCtx, writeMu, *bufPtr, conn)
-		s.tcpPool.Put(bufPtr)
-	})
-}
-
-// tlsConnectionStater is a common interface for connections that can return
-// a TLS connection state.
-type tlsConnectionStater interface {
-	ConnectionState() tls.ConnectionState
-}
-
-// serveTCPMessage processes a single TCP message.  It is intended to be used as
-// a goroutine.  All arguments must not be nil.
-func (s *ServerDNS) serveTCPMessage(
-	ctx context.Context,
-	writeMu *sync.Mutex,
-	buf []byte,
-	conn net.Conn,
-) {
-	defer s.handlePanicAndRecover(ctx)
-
-	written := s.serveDNS(ctx, buf, &tcpResponseWriter{
-		respPool:     s.respPool,
-		writeMu:      writeMu,
-		conn:         conn,
-		writeTimeout: s.writeTimeout,
-		idleTimeout:  s.tcpIdleTimeout,
-	})
-	if !written {
-		// Nothing has been written, so close the connection in order to avoid
-		// hanging connections.  That can happen when the handler rate-limited a
-		// connection or if garbage data has been received.
-		slogutil.CloseAndLog(ctx, s.baseLogger, conn, slog.LevelDebug)
-	}
+	return ctx, cancel
 }
 
 // readTCPMsg reads the next incoming DNS message.  If conn is a TLS connection,
-// the handshake must have already been performed.
-func (s *ServerDNS) readTCPMsg(conn net.Conn, timeout time.Duration) (bufPtr *[]byte, err error) {
+// the handshake must have already been performed.  conn must not be nil.
+func (s *ServerDNS) readTCPMsg(
+	ctx context.Context,
+	conn net.Conn,
+	timeout time.Duration,
+) (msg *dns.Msg, err error) {
 	// Use SetReadDeadline as opposed to SetDeadline, since the TLS handshake
 	// has already been performed, so conn.Read shouldn't perform writes.
 	err = conn.SetReadDeadline(time.Now().Add(timeout))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("setting deadline: %w", err)
 	}
 
 	var length uint16
-	if err = binary.Read(conn, binary.BigEndian, &length); err != nil {
-		return nil, err
+	err = binary.Read(conn, binary.BigEndian, &length)
+	if err != nil {
+		return nil, fmt.Errorf("reading length: %w", err)
 	}
 
-	bufPtr = s.getTCPBuffer(int(length))
+	bufPtr := s.getTCPBuffer(int(length))
+	defer s.tcpPool.Put(bufPtr)
+
 	_, err = io.ReadFull(conn, *bufPtr)
 	if err != nil {
-		s.tcpPool.Put(bufPtr)
-
-		return nil, err
+		return nil, fmt.Errorf("reading message: %w", err)
 	}
 
-	return bufPtr, nil
+	req := &dns.Msg{}
+	err = req.Unpack(*bufPtr)
+	if err != nil {
+		s.metrics.OnInvalidMsg(ctx)
+
+		return nil, fmt.Errorf("unpacking message: %w", err)
+	}
+
+	return req, nil
 }
 
 // getTCPBuffer returns a TCP buffer to be used to read the incoming DNS query
@@ -277,100 +316,4 @@ func (s *ServerDNS) getTCPBuffer(length int) (bufPtr *[]byte) {
 	*bufPtr = buf
 
 	return bufPtr
-}
-
-// tcpResponseWriter implements ResponseWriter interface for a DNS-over-TCP or
-// a DNS-over-TLS server.
-type tcpResponseWriter struct {
-	respPool *syncutil.Pool[[]byte]
-	// writeMu is used to serialize the sequence of setting the write deadline,
-	// writing to a connection, and resetting the write deadline, across
-	// multiple goroutines in the pipeline.
-	writeMu      *sync.Mutex
-	conn         net.Conn
-	writeTimeout time.Duration
-	idleTimeout  time.Duration
-}
-
-// type check
-var _ ResponseWriter = (*tcpResponseWriter)(nil)
-
-// LocalAddr implements the ResponseWriter interface for *tcpResponseWriter.
-func (r *tcpResponseWriter) LocalAddr() (addr net.Addr) {
-	return r.conn.LocalAddr()
-}
-
-// RemoteAddr implements the ResponseWriter interface for *tcpResponseWriter.
-func (r *tcpResponseWriter) RemoteAddr() (addr net.Addr) {
-	return r.conn.RemoteAddr()
-}
-
-// WriteMsg implements the ResponseWriter interface for *tcpResponseWriter.
-func (r *tcpResponseWriter) WriteMsg(ctx context.Context, req, resp *dns.Msg) (err error) {
-	si := MustServerInfoFromContext(ctx)
-	normalizeTCP(si.Proto, req, resp)
-	r.addTCPKeepAlive(req, resp)
-
-	bufPtr := r.respPool.Get()
-	defer func() {
-		if err != nil {
-			r.respPool.Put(bufPtr)
-		}
-	}()
-
-	b, err := packWithPrefix(resp, *bufPtr)
-	if err != nil {
-		return fmt.Errorf("tcp: packing response: %w", err)
-	}
-
-	*bufPtr = b
-
-	// Serialize the write deadline setting on the shared connection, since
-	// messages accepted over TCP are processed out of order.
-	r.writeMu.Lock()
-	defer r.writeMu.Unlock()
-
-	// Use SetWriteDeadline as opposed to SetDeadline, since the TLS handshake
-	// has already been performed, so conn.Write shouldn't perform reads.
-	withWriteDeadline(ctx, r.writeTimeout, r.conn, func() {
-		_, err = r.conn.Write(b)
-	})
-
-	if err != nil {
-		return &WriteError{
-			Err:      err,
-			Protocol: "tcp",
-		}
-	}
-
-	return nil
-}
-
-// addTCPKeepAlive adds a ENDS0 TCP keep-alive option to the DNS response
-// as per RFC 7828.  This option specifies the desired idle connection timeout.
-func (r *tcpResponseWriter) addTCPKeepAlive(req, resp *dns.Msg) {
-	reqOpt := req.IsEdns0()
-	respOpt := resp.IsEdns0()
-
-	if reqOpt == nil ||
-		respOpt == nil ||
-		findOption[*dns.EDNS0_TCP_KEEPALIVE](reqOpt) == nil {
-		// edns-tcp-keepalive can only be added if it's explicitly indicated in
-		// the DNS request that it's supported.
-		return
-	}
-
-	keepAliveOpt := findOption[*dns.EDNS0_TCP_KEEPALIVE](respOpt)
-	if keepAliveOpt == nil {
-		keepAliveOpt = &dns.EDNS0_TCP_KEEPALIVE{
-			Code: dns.EDNS0TCPKEEPALIVE,
-		}
-		respOpt.Option = append(respOpt.Option, keepAliveOpt)
-	}
-
-	// Should be specified in units of 100 milliseconds encoded in network byte
-	// order.
-	// #nosec G115 -- r.idleTimeout comes from [ConfigDNS.TCPIdleTimeout], which
-	// is validated in [newServerDNS].
-	keepAliveOpt.Timeout = uint16(r.idleTimeout.Milliseconds() / 100)
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/debugsvc"
 	"github.com/AdguardTeam/AdGuardDNS/internal/dnsdb"
 	"github.com/AdguardTeam/AdGuardDNS/internal/errcoll"
+	"github.com/AdguardTeam/AdGuardDNS/internal/geoip"
 	"github.com/AdguardTeam/AdGuardDNS/internal/remotekv/consulkv"
 	"github.com/AdguardTeam/AdGuardDNS/internal/remotekv/rediskv"
 	"github.com/AdguardTeam/AdGuardDNS/internal/version"
@@ -72,7 +73,8 @@ type environment struct {
 	CustomDomainsCachePath string `env:"CUSTOM_DOMAINS_CACHE_PATH"`
 	DNSCheckKVType         string `env:"DNSCHECK_KV_TYPE"`
 	DNSCheckRemoteKVAPIKey string `env:"DNSCHECK_REMOTEKV_API_KEY"`
-	FilterCachePath        string `env:"FILTER_CACHE_PATH" envDefault:"./filters/"`
+	// TODO(f.setrakov): Rename env.
+	FilterCacheDir         string `env:"FILTER_CACHE_PATH" envDefault:"./filters/"`
 	GeoIPASNPath           string `env:"GEOIP_ASN_PATH" envDefault:"./asn.mmdb"`
 	GeoIPCountryPath       string `env:"GEOIP_COUNTRY_PATH" envDefault:"./country.mmdb"`
 	LogFormat              string `env:"LOG_FORMAT" envDefault:"text"`
@@ -102,14 +104,17 @@ type environment struct {
 
 	CustomDomainsRefreshIvl  timeutil.Duration `env:"CUSTOM_DOMAINS_REFRESH_INTERVAL"`
 	DNSCheckKVTTL            timeutil.Duration `env:"DNSCHECK_KV_TTL"`
+	FilterRefreshIvl         timeutil.Duration `env:"FILTER_REFRESH_INTERVAL"`
 	ProfilesCacheIvl         timeutil.Duration `env:"PROFILES_CACHE_INTERVAL"`
 	SessionTicketRefreshIvl  timeutil.Duration `env:"SESSION_TICKET_REFRESH_INTERVAL"`
 	StandardAccessRefreshIvl timeutil.Duration `env:"STANDARD_ACCESS_REFRESH_INTERVAL"`
 	StandardAccessTimeout    timeutil.Duration `env:"STANDARD_ACCESS_TIMEOUT"`
 
+	BlockProfileRateDenominator int `env:"BLOCK_PROFILE_RATE_DENOM"`
 	// TODO(a.garipov):  Rename to DNSCHECK_CACHE_KV_COUNT?
-	DNSCheckCacheKVSize int `env:"DNSCHECK_CACHE_KV_SIZE"`
-	MaxThreads          int `env:"MAX_THREADS"`
+	DNSCheckCacheKVSize         int `env:"DNSCHECK_CACHE_KV_SIZE"`
+	MaxThreads                  int `env:"MAX_THREADS"`
+	MutexProfileRateDenominator int `env:"MUTEX_PROFILE_RATE_DENOM"`
 
 	QueryLogSemaphoreLimit uint `env:"QUERYLOG_SEMAPHORE_LIMIT"`
 
@@ -153,14 +158,6 @@ func (envs *environment) Validate() (err error) {
 
 	errs = envs.validateHTTPURLs(errs)
 
-	if s := envs.FilterIndexURL.Scheme; !strings.EqualFold(s, urlutil.SchemeFile) &&
-		!urlutil.IsValidHTTPURLScheme(s) {
-		errs = append(errs, fmt.Errorf(
-			"%s: not a valid http(s) url or file uri",
-			"FILTER_INDEX_URL",
-		))
-	}
-
 	err = envs.validateCategoryFilterIndex()
 	if err != nil {
 		errs = append(errs, fmt.Errorf("CATEGORY_FILTER_INDEX_URL: %w", err))
@@ -181,6 +178,7 @@ func (envs *environment) Validate() (err error) {
 		errs = append(errs, fmt.Errorf("VERBOSE: %w", err))
 	}
 
+	errs = envs.validateFilters(errs)
 	errs = envs.validateCrashOutput(errs)
 	errs = envs.validateCustomDomains(errs)
 	errs = envs.validateDNSCheck(errs)
@@ -191,6 +189,24 @@ func (envs *environment) Validate() (err error) {
 	errs = envs.validateStandardAccess(errs)
 
 	return errors.Join(errs...)
+}
+
+// validateFilters appends validation errors to errs if the environment
+// variables for filter index contain errors.
+func (envs *environment) validateFilters(orig []error) (errs []error) {
+	errs = orig
+
+	if s := envs.FilterIndexURL.Scheme; !strings.EqualFold(s, urlutil.SchemeFile) &&
+		!urlutil.IsValidHTTPURLScheme(s) {
+		errs = append(errs, fmt.Errorf(
+			"%s: not a valid http(s) url or file uri",
+			"FILTER_INDEX_URL",
+		))
+	}
+
+	errs = append(errs, validate.Positive("FILTER_REFRESH_INTERVAL", envs.FilterRefreshIvl))
+
+	return errs
 }
 
 // urlEnvData is a helper struct for validation of URLs set in environment
@@ -490,14 +506,17 @@ func (envs *environment) validateProfilesConf(profilesEnabled bool) (err error) 
 	errs = append(
 		errs,
 		validate.NoGreaterThan("PROFILES_MAX_RESP_SIZE", envs.ProfilesMaxRespSize, math.MaxInt),
-		validate.Positive("PROFILES_CACHE_INTERVAL", envs.ProfilesCacheIvl),
 	)
 
 	if envs.ProfilesCachePath == "none" {
 		return errors.Join(errs...)
 	}
 
-	errs = append(errs, validate.NotEmpty("PROFILES_CACHE_TYPE", envs.ProfilesCacheType))
+	errs = append(
+		errs,
+		validate.Positive("PROFILES_CACHE_INTERVAL", envs.ProfilesCacheIvl),
+		validate.NotEmpty("PROFILES_CACHE_TYPE", envs.ProfilesCacheType),
+	)
 
 	switch typ := envs.ProfilesCacheType; typ {
 	case
@@ -647,9 +666,11 @@ func (envs *environment) buildErrColl(
 }
 
 // debugConf returns a debug HTTP service configuration from environment.
+// logger and geoIP must not be nil.
 func (envs *environment) debugConf(
 	dnsDB dnsdb.Interface,
 	logger *slog.Logger,
+	geoIP geoip.Interface,
 ) (conf *debugsvc.Config) {
 	// TODO(a.garipov): Simplify the config if these are guaranteed to always be
 	// the same.
@@ -669,6 +690,7 @@ func (envs *environment) debugConf(
 
 	conf = &debugsvc.Config{
 		DNSDBHandler:   dnsDBHdlr,
+		GeoIP:          geoIP,
 		Logger:         logger.With(slogutil.KeyPrefix, "debugsvc"),
 		DNSDBAddr:      dnsDBAddr,
 		APIAddr:        addr,

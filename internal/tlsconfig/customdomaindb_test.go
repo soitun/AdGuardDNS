@@ -821,6 +821,52 @@ func TestCustomDomainDB_Refresh_retry(t *testing.T) {
 	}))
 }
 
+func TestCustomDomainDB_Refresh_stale(t *testing.T) {
+	t.Parallel()
+
+	cacheDir := t.TempDir()
+
+	now := testTimeNow
+
+	db := newCustomDomainDB(t, &tlsconfig.CustomDomainDBConfig{
+		Clock: &faketime.Clock{
+			OnNow: func() (n time.Time) { return now },
+		},
+		Storage: &testCustomDomainStorage{
+			onCertificateData: func(
+				ctx context.Context,
+				certName agd.CertificateName,
+			) (cert, key []byte, err error) {
+				certDER, rsaKey := newCertAndKey(t, 1)
+
+				return certDER, x509.MarshalPKCS1PrivateKey(rsaKey), nil
+			},
+		},
+		CacheDirPath: cacheDir,
+		BindPrefixes: testBindPrefixes,
+	})
+
+	ctx := testutil.ContextWithTimeout(t, testTimeout)
+	db.AddCertificate(ctx, testProfileID, testDomains, testStateOK)
+
+	ctx = testutil.ContextWithTimeout(t, testTimeout)
+	err := db.Refresh(ctx)
+	require.NoError(t, err)
+
+	wantCertPath, wantKeyPath := newCertAndKeyPaths(cacheDir)
+	require.FileExists(t, wantCertPath)
+	require.FileExists(t, wantKeyPath)
+
+	now = testStateOK.NotAfter.Add(1 * time.Minute)
+
+	ctx = testutil.ContextWithTimeout(t, testTimeout)
+	err = db.Refresh(ctx)
+	require.NoError(t, err)
+
+	assert.NoFileExists(t, wantCertPath)
+	assert.NoFileExists(t, wantKeyPath)
+}
+
 func TestCustomDomainDB_Refresh_present(t *testing.T) {
 	t.Parallel()
 

@@ -17,7 +17,4 @@ type Storage interface {
 	// ForConfig returns a filter created from the configuration.  If c is nil,
 	// f is [filter.Empty].
 	ForConfig(ctx context.Context, c Config) (f Interface)
-
-	// HasListID returns true if id is known to the storage.
-	HasListID(id ID) (ok bool)
 }

@@ -29,19 +29,19 @@ func BenchmarkFilter_FilterReqWithRuleLists(b *testing.B) {
 	ctx := context.Background()
 	req := filtertest.NewRequest(b, "", filtertest.HostBlocked, filtertest.IPv4Client, dns.TypeA)
 
-	var result filter.Result
+	var res filter.Result
 
 	b.ReportAllocs()
 	for b.Loop() {
-		result = f.filterReqWithRuleLists(ctx, req)
+		res, _ = f.filterReqWithRuleLists(ctx, req)
 	}
 
-	assert.NotNil(b, result)
+	assert.NotNil(b, res)
 
 	// Most recent results:
-	//	goos: linux
-	//	goarch: amd64
+	//	goos: darwin
+	//	goarch: arm64
 	//	pkg: github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/composite
-	//	cpu: AMD Ryzen 7 PRO 4750U with Radeon Graphics
-	//	BenchmarkFilter_FilterReqWithRuleLists-16    	  748243	      1394 ns/op	     468 B/op	       8 allocs/op
+	//	cpu: Apple M3
+	//  BenchmarkFilter_FilterReqWithRuleLists-8   	 1880119	       634.6 ns/op	     519 B/op	       9 allocs/op
 }

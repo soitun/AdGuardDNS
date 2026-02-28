@@ -12,8 +12,7 @@ import (
 type NonWriterResponseWriter struct {
 	localAddr  net.Addr
 	remoteAddr net.Addr
-	req        *dns.Msg // request (should be supplied in the WriteMsg method)
-	res        *dns.Msg // message that has been written (if any)
+	resp       *dns.Msg
 }
 
 // type check
@@ -38,15 +37,13 @@ func (r *NonWriterResponseWriter) RemoteAddr() (addr net.Addr) {
 }
 
 // WriteMsg implements the ResponseWriter interface for *NonWriterResponseWriter.
-func (r *NonWriterResponseWriter) WriteMsg(_ context.Context, req, resp *dns.Msg) (err error) {
-	// Just save the response, we'll use it later (see httpHandler for instance)
-	r.req = req
-	r.res = resp
+func (r *NonWriterResponseWriter) WriteMsg(_ context.Context, _, resp *dns.Msg) (err error) {
+	r.resp = resp
 
 	return nil
 }
 
-// Msg returns the message that has been written.
-func (r *NonWriterResponseWriter) Msg() (m *dns.Msg) {
-	return r.res
+// Resp returns the message that has been written.
+func (r *NonWriterResponseWriter) Resp() (m *dns.Msg) {
+	return r.resp
 }

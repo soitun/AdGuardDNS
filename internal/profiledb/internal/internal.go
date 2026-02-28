@@ -22,7 +22,8 @@ const FileCacheVersion = 19
 // stored cache version doesn't match current [FileCacheVersion].
 const CacheVersionError errors.Error = "unsuitable cache version"
 
-// FileCache contains the data that is cached on the filesystem.
+// FileCache contains the data that is cached on the filesystem.  The Profiles
+// and Devices may be modified after being passed to [FileCacheStorage.Store].
 type FileCache struct {
 	SyncTime time.Time
 	Profiles []*agd.Profile

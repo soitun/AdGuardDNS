@@ -18,9 +18,13 @@ type Config interface {
 
 // ConfigClient is a [Config] for a client.
 type ConfigClient struct {
-	// Custom is the configuration for identification or construction of a
+	// CustomFilter is the configuration for identification or construction of a
 	// custom filter for a client.  It must not be nil.
-	Custom *ConfigCustom
+	CustomFilter *ConfigCustomFilter
+
+	// CustomRuleList is the configuration for the filtering based on custom
+	// rule lists.  It must not be nil.
+	CustomRuleList *ConfigCustomRuleList
 
 	// Parental is the configuration for parental-control filtering.  It must
 	// not be nil.
@@ -41,9 +45,9 @@ var _ Config = (*ConfigClient)(nil)
 // isConfig implements the [Config] interface for *ConfigClient.
 func (*ConfigClient) isConfig() {}
 
-// ConfigCustom is the configuration for identification or construction of a
-// custom filter for a client.
-type ConfigCustom struct {
+// ConfigCustomFilter is the configuration for identification or construction of
+// a custom filter for a client.
+type ConfigCustomFilter struct {
 	// Filter is the custom filter to use for this client, if any.  If
 	// [ConfigCustom.Enabled] is true, Filter must not be nil.
 	Filter Custom
@@ -107,6 +111,18 @@ type ConfigCategories struct {
 	IDs []CategoryID
 
 	// Enabled shows whether the category filtering is enabled.
+	Enabled bool
+}
+
+// ConfigCustomRuleList is the configuration for the filtering based on custom
+// rule lists.
+type ConfigCustomRuleList struct {
+	// IDs are the IDs of the custom filtering-rule lists used for this
+	// filtering configuration.  They are ignored if [ConfigRuleList.Enabled] is
+	// false.
+	IDs []ID
+
+	// Enabled shows whether the cusotm rule-list based filtering is enabled.
 	Enabled bool
 }
 

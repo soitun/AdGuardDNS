@@ -89,7 +89,7 @@ const (
 type RuleText string
 
 // MaxRuleTextRuneLen is the maximum length of a filter rule in runes.
-const MaxRuleTextRuneLen = 1024
+const MaxRuleTextRuneLen = 10_000
 
 // NewRuleText converts a simple string into a RuleText and makes sure that it's
 // valid.  This should be preferred to a simple type conversion.

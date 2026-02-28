@@ -7,6 +7,38 @@ The format is **not** based on [Keep a Changelog][kec], since the project **does
 [kec]: https://keepachangelog.com/en/1.0.0/
 [sem]: https://semver.org/spec/v2.0.0.html
 
+## AGDNS-3587 / Build 1144
+
+- The querylog now has two new fields, `"ac"`, which is a 32-bit integer, representing the account ID and `"st"` which indicates whether this log entry should be streamed.
+
+## AGDNS-3594 / Build 1141
+
+- The new object `ratelimit.active_request_limit` has been added:
+
+    ```yaml
+    ratelimit:
+        # …
+        active_request_limit:
+            enabled: true
+            max: 10000
+    ```
+
+## AGDNS-3504 / Build 1122
+
+- The new environment variable `FILTER_REFRESH_INTERVAL` has been added.
+
+## AGDNS-3527 / Build 1118
+
+- The new environment variables `BLOCK_PROFILE_RATE_DENOM` and `MUTEX_PROFILE_RATE_DENOM` have been added.
+
+## AGDNS-3362 / Build 1117
+
+- The field `u` has been removed from querylog.
+
+## AGDNS-3504 / Build 1116
+
+- The new property `timeUpdated` is now required in JSON data returned by the endpoint configured with `FILTER_INDEX_URL` environment variable. The time must be in `2006-01-02T15:04:05-0700` format.
+
 ## AGDNS-2603 / Build 1114
 
 - The new environment variable `PROFILES_CACHE_TYPE` has been added.

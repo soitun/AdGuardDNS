@@ -380,7 +380,7 @@ func (mh *mwHandler) ServeDNS(
 		return fmt.Errorf("requesting upstream: %w", err)
 	}
 
-	resp = nrw.Msg()
+	resp = nrw.Resp()
 	if resp == nil {
 		return nil
 	}

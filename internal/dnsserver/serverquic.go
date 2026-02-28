@@ -55,6 +55,7 @@ const (
 	// DOQCodeNoError is used when the connection or stream needs to be closed,
 	// but there is no error to signal.
 	DOQCodeNoError = quic.ApplicationErrorCode(0)
+
 	// DOQCodeProtocolError signals that the DoQ implementation encountered
 	// a protocol error and is forcibly aborting the connection.
 	DOQCodeProtocolError = quic.ApplicationErrorCode(2)
@@ -273,6 +274,8 @@ func (s *ServerQUIC) serveQUIC(ctx context.Context, l *quic.Listener) {
 }
 
 // acceptQUICConn reads and starts processing a single QUIC connection.
+//
+// NOTE:  Any error returned from this method stops handling on l.
 func (s *ServerQUIC) acceptQUICConn(
 	ctx context.Context,
 	l *quic.Listener,
@@ -293,11 +296,13 @@ func (s *ServerQUIC) acceptQUICConn(
 	}
 
 	err = s.taskPool.submitWG(wg, func() {
-		s.serveQUICConnAsync(ctx, conn)
+		defer s.handlePanicAndRecover(ctx)
+
+		s.serveQUICConn(ctx, conn)
 	})
 	if err != nil {
-		// Most likely the workerPool is closed, and we can exit right away.
-		// Make sure that the connection is closed just in case.
+		// Most likely the taskPool is closed.  Exit and make sure that the
+		// connection is closed just in case.
 		s.closeQUICConn(ctx, conn, DOQCodeNoError)
 
 		return err
@@ -306,225 +311,217 @@ func (s *ServerQUIC) acceptQUICConn(
 	return nil
 }
 
-// serveQUICConnAsync wraps [ServerQUIC.serveQUICConn] call and handles errors
-// that could happen in it.  It is intended to be used as a goroutine.  conn
-// must not be nil.
-//
-// TODO(a.garipov):  Refactor ServerQUIC.serveQUICConn and merge this one into
-// it.
-func (s *ServerQUIC) serveQUICConnAsync(ctx context.Context, conn *quic.Conn) {
-	defer s.handlePanicAndRecover(ctx)
-
-	err := s.serveQUICConn(ctx, conn)
-	if !isExpectedQUICErr(err) {
-		s.metrics.OnError(ctx, err)
-		s.baseLogger.DebugContext(ctx, "serving quic conn", slogutil.KeyError, err)
+// isReportableQUICStreamError is a helper that returns true if err is network
+// error that should be reported when it arises from a stream.  If err is nil,
+// ok is false.
+func isReportableQUICStreamError(err error) (ok bool) {
+	if err == nil {
+		return false
 	}
+
+	if isNonCriticalNetError(err) {
+		return false
+	}
+
+	var readErr *quicReadError
+	if errors.As(err, &readErr) {
+		return false
+	}
+
+	// [quic.ApplicationError.Unwrap] always returns [net.ErrClosed].
+	return !errors.Is(err, net.ErrClosed)
 }
 
 // serveQUICConn handles a new QUIC connection.  It waits for new streams and
-// passes them to serveQUICStream.
-func (s *ServerQUIC) serveQUICConn(ctx context.Context, conn *quic.Conn) (err error) {
-	streamWg := &sync.WaitGroup{}
+// passes them to [serveQUICStream].
+func (s *ServerQUIC) serveQUICConn(ctx context.Context, conn *quic.Conn) {
+	var err error
 	defer func() {
-		// Wait until all streams are processed.
-		streamWg.Wait()
+		if isReportableQUICStreamError(err) {
+			s.metrics.OnError(ctx, err)
+			s.baseLogger.DebugContext(ctx, "serving quic conn", slogutil.KeyError, err)
+		}
+	}()
 
-		// Close the connection to make sure resources are freed.
-		s.closeQUICConn(ctx, conn, DOQCodeNoError)
+	streamWg := &sync.WaitGroup{}
+
+	doqCode := DOQCodeNoError
+	defer func() {
+		streamWg.Wait()
+		s.closeQUICConn(ctx, conn, doqCode)
 	}()
 
 	for s.isStarted() {
-		// The stub to resolver DNS traffic follows a simple pattern in which
-		// the client sends a query, and the server provides a response.  This
-		// design specifies that for each subsequent query on a QUIC connection
-		// the client MUST select the next available client-initiated
-		// bidirectional stream.
 		var stream *quic.Stream
-		acceptCtx, cancel := context.WithDeadline(ctx, time.Now().Add(maxQUICIdleTimeout))
-
-		// For some reason AcceptStream below seems to get stuck even when
-		// acceptCtx is canceled.  As a mitigation, check the context manually
-		// right before feeding it into AcceptStream.
-		//
-		// TODO(a.garipov): Try to reproduce and report.
-		select {
-		case <-acceptCtx.Done():
-			cancel()
-
-			return fmt.Errorf("checking accept ctx: %w", acceptCtx.Err())
-		default:
-			// Go on.
-		}
-
-		stream, err = conn.AcceptStream(acceptCtx)
-		// Make sure to call the cancel function to avoid leaks.
-		cancel()
+		stream, err = s.acceptStream(ctx, conn)
 		if err != nil {
-			return err
+			// Don't wrap the error, because it's informative enough as is.
+			return
 		}
 
-		tlsConnState := conn.ConnectionState().TLS
-		ri := &RequestInfo{
-			TLS:       &tlsConnState,
-			StartTime: time.Now(),
-		}
-
-		reqCtx, reqCancel := s.requestContext(context.Background())
-		reqCtx = ContextWithRequestInfo(reqCtx, ri)
-
-		err = s.taskPool.submitWG(streamWg, func() {
-			defer reqCancel()
-
-			s.serveQUICStreamAsync(reqCtx, stream, conn)
-		})
+		doqCode, err = s.serveQUICStream(ctx, conn, stream, streamWg)
 		if err != nil {
-			// The workerPool is closed, we should simply exit.  Make sure that
-			// the stream is closed just in case.
-			_ = stream.Close()
-
-			return err
+			// Don't wrap the error, because it's informative enough as is.
+			return
 		}
 	}
-
-	return nil
 }
 
-// serveQUICStreamAsync wraps [ServerQUIC.serveQUICStream] call and handle
-// errors that could happen in it.  It is intended to be used as a goroutine.
-// stream and conn must not be nil.
+// serveQUICStream serves a single QUIC stream.  All arguments must not be nil.
 //
-// TODO(a.garipov):  Refactor ServerQUIC.serveQUICStream and merge this one into
-// it.
-func (s *ServerQUIC) serveQUICStreamAsync(
-	ctx context.Context,
-	stream *quic.Stream,
-	conn *quic.Conn,
-) {
-	defer s.handlePanicAndRecover(ctx)
-
-	err := s.serveQUICStream(ctx, stream, conn)
-	if !isExpectedQUICErr(err) {
-		s.metrics.OnError(ctx, err)
-		s.baseLogger.DebugContext(ctx, "serving quic stream", slogutil.KeyError, err)
-	}
-}
-
-// serveQUICStream reads DNS queries from the stream, processes them,
-// and writes back the responses.
+// TODO(a.garipov):  Audit the error conditions in this method and optimize for
+// fewer unnecessary connection breaks.
+//
+// NOTE:  Any error returned from this method stops handling on conn.
 func (s *ServerQUIC) serveQUICStream(
-	ctx context.Context,
-	stream *quic.Stream,
+	parent context.Context,
 	conn *quic.Conn,
-) (err error) {
-	// The server MUST send the response on the same stream, and MUST indicate
-	// through the STREAM FIN mechanism that no further data will be sent on
-	// that stream.
-	defer slogutil.CloseAndLog(ctx, s.baseLogger, stream, slog.LevelDebug)
+	stream *quic.Stream,
+	wg *sync.WaitGroup,
+) (errCode quic.ApplicationErrorCode, err error) {
+	ctx, cancel := s.newContextForQUICReq(parent, conn)
+	defer func() { callOnError(cancel, recover(), err) }()
 
-	msg, err := s.readQUICMsg(ctx, stream)
+	req, err := s.readQUICMsg(ctx, stream)
 	if err != nil {
-		s.closeQUICConn(ctx, conn, DOQCodeProtocolError)
-
-		return err
+		return DOQCodeProtocolError, fmt.Errorf("reading quic message: %w", err)
 	}
 
-	if !validQUICMsg(msg) {
-		// If a peer encounters such an error condition, it is considered a
-		// fatal error. It SHOULD forcibly abort the connection using QUIC's
-		// CONNECTION_CLOSE mechanism and SHOULD use the DoQ error code
-		// DOQ_PROTOCOL_ERROR.
-		s.closeQUICConn(ctx, conn, DOQCodeProtocolError)
-
-		return ErrProtocol
-	}
-
-	localAddr := conn.LocalAddr()
-	remoteAddr := conn.RemoteAddr()
-	rw := NewNonWriterResponseWriter(localAddr, remoteAddr)
-
-	var resp *dns.Msg
-	written := s.serveDNSMsg(ctx, msg, rw)
-	if !written {
-		// Make sure that at least some response has been written
-		resp = genErrorResponse(msg, dns.RcodeServerFailure)
-	} else {
-		resp = rw.Msg()
-	}
-
-	// Normalize before writing the response.  Note that for QUIC we can
-	// normalize as if it was TCP.
-	normalizeTCP(ProtoDoQ, msg, resp)
-
-	bufPtr := s.respPool.Get()
-	defer s.respPool.Put(bufPtr)
-
-	b, err := packWithPrefix(resp, *bufPtr)
+	rw := s.newQUICRW(conn, stream)
+	err = s.acquireSema(ctx, s.activeRequestsSema, req, rw, errMsgActiveReqSema)
 	if err != nil {
-		s.closeQUICConn(ctx, conn, DOQCodeProtocolError)
+		// Don't return the error to not close the connection.
+		return DOQCodeNoError, nil
+	}
+	defer func() { callOnError(s.activeRequestsSema.Release, recover(), err) }()
 
-		return err
+	err = s.taskPool.submitWG(wg, func() {
+		defer s.handlePanicAndRecover(ctx)
+		defer cancel()
+		defer s.activeRequestsSema.Release()
+
+		// The server MUST send the response on the same stream, and MUST
+		// indicate through the STREAM FIN mechanism that no further data will
+		// be sent on that stream.
+		defer slogutil.CloseAndLog(ctx, s.baseLogger, stream, slog.LevelDebug)
+
+		_ = s.serveDNSMsg(ctx, req, rw)
+	})
+	if err != nil {
+		// Most likely the taskPool is closed.  Exit and make sure that the
+		// stream is closed just in case.
+		return DOQCodeNoError, errors.WithDeferred(err, stream.Close())
 	}
 
-	*bufPtr = b
-
-	_, err = stream.Write(b)
-
-	s.disposer.Dispose(resp)
-
-	return err
+	return DOQCodeNoError, nil
 }
 
-// readQUICMsg reads a DNS query from the QUIC stream and returns an error
-// if anything went wrong.
+// newContextForQUICReq returns a new context for a QUIC request.  All arguments
+// must not be nil.
+func (s *ServerQUIC) newContextForQUICReq(
+	parent context.Context,
+	conn *quic.Conn,
+) (ctx context.Context, cancel context.CancelFunc) {
+	ctx, cancel = s.reqCtx.New(context.WithoutCancel(parent))
+	tlsConnState := conn.ConnectionState().TLS
+	ctx = ContextWithRequestInfo(ctx, &RequestInfo{
+		TLS:       &tlsConnState,
+		StartTime: time.Now(),
+	})
+
+	return ctx, cancel
+}
+
+// quicReadError is returned from [ServerQUIC.readQUICMsg].
+//
+// TODO(a.garipov):  Improve error handling and consider removing this.
+type quicReadError struct {
+	err error
+}
+
+// type check
+var _ error = (*quicReadError)(nil)
+
+// Error implements the [error] interface for *quicReadError.
+func (err *quicReadError) Error() (msg string) {
+	return fmt.Sprintf("reading quic message: %s", err.err)
+}
+
+// type check
+var _ errors.Wrapper = (*quicReadError)(nil)
+
+// Error implements the [errors.Wrapper] interface for *quicReadError.
+func (err *quicReadError) Unwrap() (unwrapped error) {
+	return err.err
+}
+
+// readQUICMsg reads a DNS query from the QUIC stream and returns an error if
+// anything went wrong.  Any error returned will be of type [*quicReadError].
+// All arguments must not be nil.
 func (s *ServerQUIC) readQUICMsg(
 	ctx context.Context,
 	stream *quic.Stream,
-) (m *dns.Msg, err error) {
+) (req *dns.Msg, err error) {
+	defer func() {
+		if err != nil {
+			err = &quicReadError{
+				err: err,
+			}
+		}
+	}()
+
 	bufPtr := s.reqPool.Get()
 	defer s.reqPool.Put(bufPtr)
 
 	buf := *bufPtr
 	buf = buf[:quicBytePoolSize]
 
-	// One query - one stream.
-	// The client MUST send the DNS query over the selected stream, and MUST
-	// indicate through the STREAM FIN mechanism that no further data will
-	// be sent on that stream.
-	_ = stream.SetReadDeadline(time.Now().Add(DefaultReadTimeout))
+	// One query, one stream.  The client MUST send the DNS query over the
+	// selected stream, and MUST indicate through the STREAM FIN mechanism that
+	// no further data will be sent on that stream.
+	err = stream.SetReadDeadline(time.Now().Add(DefaultReadTimeout))
+	if err != nil {
+		return nil, fmt.Errorf("setting read deadline: %w", err)
+	}
 
 	// Read the stream data until io.EOF, i.e. until FIN is received.
 	n, err := readAll(stream, buf)
 
 	// err is not checked here because STREAM FIN sent by the client is
-	// indicated as an error here. instead, we should check the number of bytes
-	// received.
+	// indicated as an error here.  Instead, check the number of bytes received.
 	if n < DNSHeaderSize {
 		if err != nil {
-			return nil, fmt.Errorf("failed to read QUIC message: %w", err)
+			return nil, fmt.Errorf("reading into buffer: %w", err)
 		}
+
 		s.metrics.OnInvalidMsg(ctx)
 
 		return nil, dns.ErrShortRead
 	}
 
-	// TODO(a.garipov): DRY logic with the TCP one.
-	m = &dns.Msg{}
+	// TODO(a.garipov):  DRY the logic with the TCP one.
+	req = &dns.Msg{}
 	packetLen := binary.BigEndian.Uint16(buf[:2])
 	// #nosec G115 -- n has already been checked against DNSHeaderSize.
 	wantLen := uint16(n - 2)
 	if packetLen == wantLen {
-		err = m.Unpack(buf[2:])
+		err = req.Unpack(buf[2:])
 	} else {
 		err = fmt.Errorf("bad buffer size %d, want %d", packetLen, wantLen)
 	}
 	if err != nil {
 		s.metrics.OnInvalidMsg(ctx)
 
-		return nil, err
+		return nil, fmt.Errorf("unpacking quic message: %w", err)
 	}
 
-	return m, nil
+	if !validQUICMsg(req) {
+		s.metrics.OnInvalidMsg(ctx)
+
+		return nil, ErrProtocol
+	}
+
+	return req, nil
 }
 
 // readAll reads from r until an error or io.EOF into the specified buffer buf.
@@ -548,9 +545,57 @@ func readAll(r io.Reader, buf []byte) (n int, err error) {
 			if err == io.EOF {
 				err = nil
 			}
+
 			return n, err
 		}
 	}
+}
+
+// newQUICRW returns a new QUIC response writer for a request.  All arguments
+// must not be nil.
+func (s *ServerQUIC) newQUICRW(conn *quic.Conn, stream *quic.Stream) (rw *quicResponseWriter) {
+	return &quicResponseWriter{
+		respPool: s.respPool,
+		conn:     conn,
+		stream:   stream,
+		// TODO(a.garipov):  Configure.
+		writeTimeout: DefaultWriteTimeout,
+	}
+}
+
+// acceptStream accepts and starts processing a single QUIC stream.  All
+// arguments must not be nil.
+//
+// NOTE:  Any error returned from this method stops handling on conn.
+func (*ServerQUIC) acceptStream(
+	parent context.Context,
+	conn *quic.Conn,
+) (stream *quic.Stream, err error) {
+	// The stub to resolver DNS traffic follows a simple pattern in which the
+	// client sends a query, and the server provides a response.  This design
+	// specifies that for each subsequent query on a QUIC connection the client
+	// MUST select the next available client-initiated bidirectional stream.
+	ctx, cancel := context.WithDeadline(parent, time.Now().Add(maxQUICIdleTimeout))
+	defer cancel()
+
+	// For some reason AcceptStream below seems to get stuck even when ctx is
+	// canceled.  As a mitigation, check the context manually right before
+	// feeding it into AcceptStream.
+	//
+	// TODO(a.garipov): Try to reproduce and report.
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("checking accept ctx: %w", ctx.Err())
+	default:
+		// Go on.
+	}
+
+	stream, err = conn.AcceptStream(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("accepting quic stream: %w", err)
+	}
+
+	return stream, nil
 }
 
 // listenQUIC creates the UDP listener for the ServerQUIC.addr and also starts
@@ -580,57 +625,6 @@ func (s *ServerQUIC) listenQUIC(ctx context.Context) (err error) {
 	s.quicListener = ql
 
 	return nil
-}
-
-// isExpectedQUICErr checks if this error signals about closing QUIC connection,
-// stream, or server and if it's expected and does not require any recovery or
-// additional processing.
-//
-// TODO(a.garipov): Move fully or partially to the main module.
-func isExpectedQUICErr(err error) (ok bool) {
-	if err == nil {
-		return true
-	}
-
-	// Expected to be returned by all streams and connection methods calls when
-	// the server is closed.  Unfortunately, this error is not exported from
-	// quic-go.
-	if errors.Is(err, quic.ErrServerClosed) {
-		return true
-	}
-
-	// Catch quic-go's IdleTimeoutError.  This error is returned from
-	// *quic.Conn.AcceptStream calls and this is an expected outcome,
-	// happens all the time with different QUIC clients.
-	var qErr *quic.IdleTimeoutError
-	if errors.As(err, &qErr) {
-		return true
-	}
-
-	// Catch quic-go's ApplicationError with error code 0.  This error is
-	// returned from quic-go methods when the client closes the connection.
-	// This is an expected situation, and it's not necessary to log it.
-	var qAppErr *quic.ApplicationError
-	if errors.As(err, &qAppErr) && qAppErr.ErrorCode == 0 {
-		return true
-	}
-
-	// Catch a network timeout error.
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return true
-	}
-
-	// Catch EOF, which is returned when the client sends stream FIN alongside
-	// with data.  Can be safely ignored, it just means that the stream is
-	// closed.
-	if !errors.Is(err, io.EOF) {
-		return true
-	}
-
-	// Catch some common timeout and net errors.
-	return !errors.Is(err, context.DeadlineExceeded) &&
-		!errors.Is(err, net.ErrClosed)
 }
 
 // validQUICMsg validates the incoming DNS message and returns false if

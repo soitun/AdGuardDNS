@@ -18,6 +18,7 @@ const ErrDebugPanic errors.Error = "debug panic"
 const (
 	PathPatternDNSDBCSV        = "/dnsdb/csv"
 	PathPatternDebugAPICache   = "/debug/api/cache/clear"
+	PathPatternDebugAPIGeoIP   = "/debug/api/geoip"
 	PathPatternDebugAPIRefresh = "/debug/api/refresh"
 	PathPatternDebugPanic      = "/debug/panic"
 	PathPatternHealthCheck     = "/health-check"
@@ -28,6 +29,7 @@ const (
 const (
 	routePatternDNSDBCSV        = http.MethodPost + " " + PathPatternDNSDBCSV
 	routePatternDebugAPICache   = http.MethodPost + " " + PathPatternDebugAPICache
+	routePatternDebugAPIGeoIP   = http.MethodGet + " " + PathPatternDebugAPIGeoIP
 	routePatternDebugAPIRefresh = http.MethodPost + " " + PathPatternDebugAPIRefresh
 	routePatternDebugPanic      = http.MethodPost + " " + PathPatternDebugPanic
 	routePatternHealthCheck     = http.MethodGet + " " + PathPatternHealthCheck
@@ -41,19 +43,27 @@ const (
 func (svc *Service) route(c *Config) {
 	const hdlrGrpKey = "hdlr_grp"
 
+	reqIDMw := httputil.NewRequestIDMiddleware()
 	if srv := svc.servers[c.APIAddr]; srv != nil {
 		router := srv.http.Handler.(httputil.Router)
 		l := svc.logger.With(hdlrGrpKey, handlerGroupAPI)
 
 		router.Handle(
 			routePatternHealthCheck,
-			httputil.NewLogMiddleware(l, slogutil.LevelTrace).Wrap(httputil.HealthCheckHandler),
+			httputil.Wrap(
+				httputil.HealthCheckHandler,
+				reqIDMw,
+				httputil.NewLogMiddleware(l, slogutil.LevelTrace),
+			),
 		)
 
 		infoLogMw := httputil.NewLogMiddleware(l, slog.LevelInfo)
-		router.Handle(routePatternDebugAPIRefresh, infoLogMw.Wrap(svc.refrHdlr))
-		router.Handle(routePatternDebugAPICache, infoLogMw.Wrap(svc.cacheHdlr))
-		router.Handle(routePatternDebugPanic, infoLogMw.Wrap(httputil.PanicHandler(ErrDebugPanic)))
+		router.Handle(routePatternDebugAPIRefresh, httputil.Wrap(svc.refrHdlr, reqIDMw, infoLogMw))
+		router.Handle(routePatternDebugAPICache, httputil.Wrap(svc.cacheHdlr, reqIDMw, infoLogMw))
+		router.Handle(routePatternDebugAPIGeoIP, httputil.Wrap(svc.geoIPHdlr, reqIDMw, infoLogMw))
+
+		panicHdlr := httputil.PanicHandler(ErrDebugPanic)
+		router.Handle(routePatternDebugPanic, httputil.Wrap(panicHdlr, reqIDMw, infoLogMw))
 	}
 
 	if srv := svc.servers[c.DNSDBAddr]; srv != nil {
@@ -62,7 +72,11 @@ func (svc *Service) route(c *Config) {
 
 		router.Handle(
 			routePatternDNSDBCSV,
-			httputil.NewLogMiddleware(l, slog.LevelInfo).Wrap(svc.dnsDB),
+			httputil.Wrap(
+				svc.dnsDB,
+				reqIDMw,
+				httputil.NewLogMiddleware(l, slog.LevelInfo),
+			),
 		)
 	}
 
@@ -72,7 +86,7 @@ func (svc *Service) route(c *Config) {
 		mw := httputil.NewLogMiddleware(l, slog.LevelDebug)
 
 		routeWithMw := httputil.RouterFunc(func(pattern string, h http.Handler) {
-			router.Handle(pattern, mw.Wrap(h))
+			router.Handle(pattern, httputil.Wrap(h, reqIDMw, mw))
 		})
 
 		httputil.RoutePprof(routeWithMw)
@@ -84,7 +98,10 @@ func (svc *Service) route(c *Config) {
 
 		router.Handle(
 			routePatternMetrics,
-			httputil.NewLogMiddleware(l, slogutil.LevelTrace).Wrap(promhttp.Handler()),
+			httputil.Wrap(
+				promhttp.Handler(),
+				reqIDMw,
+				httputil.NewLogMiddleware(l, slogutil.LevelTrace)),
 		)
 	}
 
@@ -92,6 +109,6 @@ func (svc *Service) route(c *Config) {
 	for _, srv := range svc.servers {
 		l := svc.logger.With("name", srv.name)
 		srv.http.ErrorLog = slog.NewLogLogger(l.Handler(), slog.LevelDebug)
-		srv.http.Handler = srvHdrMw.Wrap(srv.http.Handler)
+		srv.http.Handler = httputil.Wrap(srv.http.Handler, srvHdrMw, reqIDMw)
 	}
 }

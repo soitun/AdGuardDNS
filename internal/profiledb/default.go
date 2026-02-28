@@ -18,6 +18,7 @@ import (
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/osutil"
+	"github.com/AdguardTeam/golibs/requestid"
 	"github.com/AdguardTeam/golibs/service"
 	"github.com/AdguardTeam/golibs/timeutil"
 )
@@ -197,8 +198,11 @@ func (db *Default) Refresh(ctx context.Context) (err error) {
 	db.logger.DebugContext(ctx, "refresh started")
 	defer db.logger.DebugContext(ctx, "refresh finished")
 
-	reqID := agd.NewRequestID()
-	ctx = agd.WithRequestID(ctx, reqID)
+	reqID, ok := requestid.IDFromContext(ctx)
+	if !ok {
+		reqID = requestid.New()
+		ctx = requestid.ContextWithRequestID(ctx, reqID)
+	}
 
 	var profNum, devNum uint
 	startTime := db.clock.Now()
@@ -375,8 +379,11 @@ func (db *Default) refreshFull(ctx context.Context) (err error) {
 	db.logger.DebugContext(ctx, "full refresh started")
 	defer db.logger.DebugContext(ctx, "full refresh finished")
 
-	reqID := agd.NewRequestID()
-	ctx = agd.WithRequestID(ctx, reqID)
+	reqID, ok := requestid.IDFromContext(ctx)
+	if !ok {
+		reqID = requestid.New()
+		ctx = requestid.ContextWithRequestID(ctx, reqID)
+	}
 
 	var profNum, devNum uint
 	startTime := db.clock.Now()

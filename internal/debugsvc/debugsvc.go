@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/AdguardTeam/AdGuardDNS/internal/agdcache"
+	"github.com/AdguardTeam/AdGuardDNS/internal/geoip"
 	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
@@ -23,6 +24,7 @@ type Service struct {
 	logger    *slog.Logger
 	refrHdlr  *refreshHandler
 	cacheHdlr *cacheHandler
+	geoIPHdlr *geoIPHandler
 	dnsDB     http.Handler
 
 	// servers are the servers of this service by their address.  Map entries
@@ -39,7 +41,12 @@ type server struct {
 
 // Config is the AdGuard DNS HTTP service configuration structure.
 type Config struct {
-	DNSDBHandler   http.Handler
+	DNSDBHandler http.Handler
+
+	// GeoIP is the GeoIP database used to detect geographic data about IP
+	// addresses in requests and responses.  It must not be nil.
+	GeoIP geoip.Interface
+
 	Logger         *slog.Logger
 	Manager        *agdcache.DefaultManager
 	Refreshers     Refreshers
@@ -69,6 +76,9 @@ func New(c *Config) (svc *Service) {
 		},
 		cacheHdlr: &cacheHandler{
 			manager: c.Manager,
+		},
+		geoIPHdlr: &geoIPHandler{
+			geoIP: c.GeoIP,
 		},
 		servers: map[string]*server{},
 		dnsDB:   c.DNSDBHandler,

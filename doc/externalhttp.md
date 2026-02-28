@@ -125,13 +125,14 @@ This endpoint, defined by [`FILTER_INDEX_URL`][env-filters], must respond with a
   "filters": [
     {
       "filterKey": "my_filter",
-      "downloadUrl": "https://cdn.example.com/assets/my_filter.txt"
+      "downloadUrl": "https://cdn.example.com/assets/my_filter.txt",
+      "timeUpdated": "2006-01-02T15:04:05-0700"
     }
   ]
 }
 ```
 
-All properties must be filled with valid IDs and URLs. Additional fields in objects are ignored.
+All properties must be filled with valid keys, URLs, and timestamps. Additional fields in objects are ignored.
 
 ### <a href="#filters-safe-search" id="filters-safe-search" name="filters-safe-search">Safe search</a>
 

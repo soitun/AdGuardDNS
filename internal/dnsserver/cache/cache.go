@@ -90,7 +90,7 @@ func (m *Middleware) Wrap(handler dnsserver.Handler) (wrapped dnsserver.Handler)
 			return fmt.Errorf("request processing: %w", err)
 		}
 
-		resp = nrw.Msg()
+		resp = nrw.Resp()
 		if resp == nil {
 			return nil
 		}

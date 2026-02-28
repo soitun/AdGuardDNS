@@ -21,6 +21,7 @@ import (
 	"github.com/AdguardTeam/golibs/httphdr"
 	"github.com/AdguardTeam/golibs/ioutil"
 	"github.com/AdguardTeam/golibs/netutil/urlutil"
+	"github.com/AdguardTeam/golibs/requestid"
 	"github.com/c2h5oh/datasize"
 	renameio "github.com/google/renameio/v2"
 )
@@ -99,6 +100,11 @@ func New(c *Config) (f *Refreshable, err error) {
 // TODO(a.garipov): Consider making refresh return a reader instead of bytes.
 func (f *Refreshable) Refresh(ctx context.Context, acceptStale bool) (b []byte, err error) {
 	defer func() { err = errors.Annotate(err, "%s: %w", f.id) }()
+
+	_, ok := requestid.IDFromContext(ctx)
+	if !ok {
+		ctx = requestid.ContextWithRequestID(ctx, requestid.New())
+	}
 
 	if strings.EqualFold(f.url.Scheme, urlutil.SchemeFile) {
 		b, err = f.refreshFromFileOnly(ctx)

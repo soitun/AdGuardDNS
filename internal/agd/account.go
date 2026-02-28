@@ -2,23 +2,46 @@ package agd
 
 import (
 	"fmt"
+	"strconv"
 
-	"github.com/AdguardTeam/AdGuardDNS/internal/agdvalidate"
+	"github.com/AdguardTeam/golibs/validate"
 )
 
 // AccountID is the ID of an account containing multiple profiles (a.k.a. DNS
-// servers).  It is an opaque string.
-type AccountID string
+// servers).
+type AccountID int32
 
-// NewAccountID converts a simple string into an AccountID and makes sure that
-// it's valid.  This should be preferred to a simple type conversion.
-func NewAccountID(s string) (id AccountID, err error) {
-	// For now, allow only the printable, non-whitespace ASCII characters.
-	// Technically we only need to exclude carriage return and line feed
-	// characters, but let's be more strict just in case.
-	if i, r := agdvalidate.FirstNonIDRune(s, false); i != -1 {
-		return "", fmt.Errorf("bad account id: bad char %q at index %d", r, i)
+// AccountIDEmpty is a value for empty account ID.
+const AccountIDEmpty AccountID = 0
+
+// NewAccountID converts int32 into an AccountID and makes sure that it is
+// valid.  This should be preferred to a simple type conversion.
+func NewAccountID(i int32) (id AccountID, err error) {
+	err = validate.Positive("i", i)
+	if err != nil {
+		// Don't wrap the error, since it's informative enough as is.
+		return AccountIDEmpty, err
 	}
 
-	return AccountID(s), nil
+	return AccountID(i), nil
+}
+
+// NewAccountIDFromString converts a simple string into an AccountID and makes sure that
+// it's valid.  This should be preferred to a simple type conversion.
+//
+// TODO(f.setrakov): Remove after migrating to int account id.
+func NewAccountIDFromString(s string) (id AccountID, err error) {
+	var id64 int64
+	id64, err = strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		return AccountIDEmpty, fmt.Errorf("bad account id: %w", err)
+	}
+
+	err = validate.Positive("account id", id64)
+	if err != nil {
+		// Don't wrap the error, since it's informative enough as is.
+		return AccountIDEmpty, err
+	}
+
+	return AccountID(id64), nil
 }

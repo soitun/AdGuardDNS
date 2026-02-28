@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/AdguardTeam/AdGuardDNS/internal/access"
+	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/refreshable"
 	"github.com/AdguardTeam/AdGuardDNS/internal/geoip"
 	"github.com/AdguardTeam/golibs/errors"
@@ -85,7 +86,11 @@ func NewStandardAccess(
 	ctx context.Context,
 	c *StandardAccessConfig,
 ) (s *StandardAccess, err error) {
-	cachePath := filepath.Join(c.CacheDir, indexFileNameStandardProfileAccess)
+	cachePath := filepath.Join(
+		c.CacheDir,
+		filter.SubDirNameIndex,
+		indexFileNameStandardProfileAccess,
+	)
 
 	refr, err := refreshable.New(&refreshable.Config{
 		Logger: c.BaseLogger.With(slogutil.KeyPrefix, "standard_access_cache"),

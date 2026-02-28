@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/AdguardTeam/AdGuardDNS/internal/agd"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
+	"github.com/AdguardTeam/AdGuardDNS/internal/filter/ruleliststorage"
 	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/validate"
@@ -177,7 +179,8 @@ type filteringGroups []*filteringGroup
 // toInternal converts groups to the filtering groups for the DNS server.
 // groups must be valid.
 func (groups filteringGroups) toInternal(
-	s filter.Storage,
+	ctx context.Context,
+	s ruleliststorage.Storage,
 ) (fltGrps map[agd.FilteringGroupID]*agd.FilteringGroup, err error) {
 	fltGrps = make(map[agd.FilteringGroupID]*agd.FilteringGroup, len(groups))
 	for _, g := range groups {
@@ -186,7 +189,7 @@ func (groups filteringGroups) toInternal(
 			// Assume that these have already been validated in
 			// [filteringGroup.validate].
 			id := filter.ID(fltID)
-			if !s.HasListID(id) {
+			if !s.HasListID(ctx, id) {
 				return nil, fmt.Errorf("filter list id %q is not in the index", id)
 			}
 

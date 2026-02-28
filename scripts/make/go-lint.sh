@@ -3,7 +3,7 @@
 # This comment is used to simplify checking local copies of the script.  Bump
 # this number every time a significant change is made to this script.
 #
-# AdGuard-Project-Version: 14
+# AdGuard-Project-Version: 17
 
 verbose="${VERBOSE:-0}"
 readonly verbose
@@ -105,11 +105,9 @@ blocklist_imports() {
 # NOTE:  Flag -H for grep is non-POSIX but all of Busybox, GNU, macOS, and
 # OpenBSD support it.
 method_const() {
-	# NOTE: File ./internal/remotekv/rediskv/rediskv.go is excluded, since it
-	# uses "GET" as a Redis command.
 	find_with_ignore \
 		-type 'f' \
-		'(' -name '*.go' '!' -path './internal/remotekv/rediskv/rediskv.go' ')' \
+		-name '*.go' \
 		-exec \
 		'grep' \
 		'-H' \
@@ -136,9 +134,7 @@ underscores() {
 			-o -name '*_generate.go' \
 			-o -name '*_grpc.pb.go' \
 			-o -name '*_linux.go' \
-			-o -name '*_noreuseport.go' \
 			-o -name '*_others.go' \
-			-o -name '*_reuseport.go' \
 			-o -name '*_test.go' \
 			-o -name '*_unix.go' \
 			-o -name '*_windows.go' \
@@ -154,6 +150,9 @@ underscores() {
 	fi
 }
 
+go="${GO:-go}"
+readonly go
+
 # TODO(a.garipov): Add an analyzer to look for `fallthrough`, `goto`, and `new`?
 
 # Checks
@@ -164,21 +163,31 @@ run_linter -e method_const
 
 run_linter -e underscores
 
-run_linter -e gofumpt --extra -e -l .
+run_linter -e "$go" tool gofumpt --extra -e -l .
 
-run_linter "${GO:-go}" vet work
+run_linter "$go" vet work
 
-run_linter govulncheck work
+# govulncheck is not stricly reproducible, because it queries the VulnDB, which
+# is updated constantly.  If a stricly reproducible lint is desired, for example
+# for Docker lint stages, set IGNORE_NON_REPRODUCIBLE to 1 to ignore the exit
+# code from govulncheck.
+if [ "${IGNORE_NON_REPRODUCIBLE:-0}" -gt '0' ]; then
+	# run_linter calls set +e, so don't mind the cancelling effect of ||.
+	# shellcheck disable=SC2310
+	run_linter "$go" tool govulncheck work || :
+else
+	run_linter "$go" tool govulncheck work
+fi
 
 # NOTE: For AdGuard DNS, ignore the generated protobuf files.
-run_linter gocyclo --ignore '\.pb\.go$' --over 10 .
+run_linter "$go" tool gocyclo --ignore '\.pb\.go$' --over 10 .
 
 # NOTE: For AdGuard DNS, ignore the generated protobuf files.
-run_linter gocognit --ignore '\.pb\.go$' --over 10 .
+run_linter "$go" tool gocognit --ignore '\.pb\.go$' --over 10 .
 
-run_linter ineffassign work
+run_linter "$go" tool ineffassign work
 
-run_linter unparam work
+run_linter "$go" tool unparam work
 
 find_with_ignore \
 	-type 'f' \
@@ -191,15 +200,15 @@ find_with_ignore \
 	-o -name '*.yaml' \
 	-o -name '*.yml' \
 	')' \
-	-exec 'misspell' '--error' '{}' '+'
+	-exec "$go" 'tool' 'misspell' '--error' '{}' '+'
 
-run_linter nilness work
+run_linter "$go" tool nilness work
 
 # TODO(a.garipov):  Remove the grep crutch once golang/go#60509 is fixed.
 #
 # TODO(a.garipov):  Add a filtering function to run_linter.
 fieldalignment_output="$(
-	fieldalignment work 2>&1 \
+	"$go" tool fieldalignment work 2>&1 \
 		| grep -e '\.pb\.go' -v \
 		|| :
 )"
@@ -213,7 +222,7 @@ fi
 
 # TODO(a.garipov): Remove the grep crutch once golang/go#61574 is fixed.
 shadow_output="$(
-	shadow --strict work 2>&1 \
+	"$go" tool shadow --strict work 2>&1 \
 		| grep -e '\.pb\.go' -v \
 		|| :
 )"
@@ -225,15 +234,11 @@ if [ "$shadow_output" != '' ]; then
 	exit 1
 fi
 
-run_linter gosec --exclude-generated --quiet ./...
+run_linter "$go" tool gosec --exclude-generated --fmt=golint --quiet work
 
-run_linter errcheck work
+run_linter "$go" tool errcheck work
 
-staticcheck_matrix='
-darwin: GOOS=darwin
-linux:  GOOS=linux
-'
-readonly staticcheck_matrix
-
-printf '%s' "$staticcheck_matrix" \
-	| run_linter staticcheck --matrix work
+run_linter "$go" tool staticcheck --matrix work <<-'EOF'
+	darwin: GOOS=darwin
+	linux:  GOOS=linux
+EOF

@@ -24,7 +24,7 @@ import (
 )
 
 // AccountID is the profile ID for tests.
-const AccountID agd.AccountID = "acc1234"
+const AccountID agd.AccountID = 1234
 
 // ProfileID is the profile ID for tests.
 const ProfileID agd.ProfileID = "prof1234"
@@ -171,8 +171,12 @@ func NewProfile(tb testing.TB) (p *agd.Profile, d *agd.Device) {
 	return &agd.Profile{
 		CustomDomains: customDomains,
 		FilterConfig: &filter.ConfigClient{
-			Custom: &filter.ConfigCustom{
+			CustomFilter: &filter.ConfigCustomFilter{
 				Filter:  custom.New(customFltConf),
+				Enabled: true,
+			},
+			CustomRuleList: &filter.ConfigCustomRuleList{
+				IDs:     []filter.ID{"custom_1"},
 				Enabled: true,
 			},
 			Parental: parental,

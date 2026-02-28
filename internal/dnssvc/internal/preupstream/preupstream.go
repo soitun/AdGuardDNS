@@ -59,7 +59,7 @@ func (mw *Middleware) Wrap(next dnsserver.Handler) (wrapped dnsserver.Handler) {
 			return err
 		}
 
-		resp := nwrw.Msg()
+		resp := nwrw.Resp()
 		ri := agd.MustRequestInfoFromContext(ctx)
 		mw.db.Record(ctx, resp, ri)
 
@@ -97,7 +97,7 @@ func (mw *Middleware) serveAndroidMetric(
 		return err
 	}
 
-	resp := nwrw.Msg()
+	resp := nwrw.Resp()
 	resp.SetReply(origReq)
 	mw.replaceResp(origReq.Question[0].Name, resp)
 

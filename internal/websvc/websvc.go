@@ -101,9 +101,11 @@ func New(c *Config) (svc *Service) {
 
 	for _, b := range c.NonDoHBind {
 		logger := svc.logger.With(loggerKeyGroup, ServerGroupNonDoH)
+		// TODO(f.setrakov): Create middlewares only once and reuse them.
 		h := httputil.Wrap(
 			svc,
 			httputil.ServerHeaderMiddleware(agdhttp.UserAgent()),
+			httputil.NewRequestIDMiddleware(),
 			httputil.NewLogMiddleware(logger, slog.LevelDebug),
 		)
 
@@ -140,6 +142,7 @@ func (svc *Service) setLinkedIP(c *Config) {
 				metrics:       c.Metrics,
 				timeout:       c.Timeout,
 			}),
+			httputil.NewRequestIDMiddleware(),
 			httputil.NewLogMiddleware(logger, slog.LevelDebug),
 		)
 
@@ -166,6 +169,7 @@ func (svc *Service) setLinkedIP(c *Config) {
 			metrics:       c.Metrics,
 			timeout:       c.Timeout,
 		}),
+		httputil.NewRequestIDMiddleware(),
 		httputil.NewLogMiddleware(logger, slog.LevelInfo),
 	)
 }
@@ -305,6 +309,7 @@ func (svc *Service) Handler() (h http.Handler) {
 	return httputil.Wrap(
 		svc,
 		httputil.ServerHeaderMiddleware(agdhttp.UserAgent()),
+		httputil.NewRequestIDMiddleware(),
 		httputil.NewLogMiddleware(logger, slog.LevelDebug),
 	)
 }

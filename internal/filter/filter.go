@@ -89,3 +89,25 @@ const (
 	GeneralTXTSuffix       = ".sb.dns.adguard.com"
 	AdultBlockingTXTSuffix = ".pc.dns.adguard.com"
 )
+
+const (
+	// SubDirNameCategory is the name of the subdirectory containing all cached
+	// category filters.
+	SubDirNameCategory = "category"
+
+	// SubDirNameHashPrefix is the name of the subdirectory containing all
+	// cached hash prefix filters.
+	SubDirNameHashPrefix = "hashprefix"
+
+	// SubDirNameIndex is the name of the subdirectory containing all cached
+	// indexes.
+	SubDirNameIndex = "index"
+
+	// SubDirNameIndex is the name of the subdirectory containing all cached
+	// rulelist filters.
+	SubDirNameRuleList = "rulelist"
+
+	// SubDirNameIndex is the name of the subdirectory containing all cached
+	// safe search filters.
+	SubDirNameSafeSearch = "safesearch"
+)

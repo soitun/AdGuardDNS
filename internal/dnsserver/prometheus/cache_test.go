@@ -47,7 +47,7 @@ func TestCacheMetricsListener_integration_cache(t *testing.T) {
 
 		err = handlerWithMiddleware.ServeDNS(ctx, nrw, req)
 		require.NoError(t, err)
-		dnsservertest.RequireResponse(t, req, nrw.Msg(), 1, dns.RcodeSuccess, false)
+		dnsservertest.RequireResponse(t, req, nrw.Resp(), 1, dns.RcodeSuccess, false)
 	}
 
 	// Now make sure that prometheus metrics were incremented properly.

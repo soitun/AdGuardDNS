@@ -17,11 +17,11 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/agdcache"
 	"github.com/AdguardTeam/AdGuardDNS/internal/agdnet"
 	"github.com/AdguardTeam/AdGuardDNS/internal/dnsmsg"
-	"github.com/AdguardTeam/AdGuardDNS/internal/errcoll"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/refreshable"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/rulelist"
 	"github.com/AdguardTeam/golibs/container"
+	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/service"
 	"github.com/AdguardTeam/golibs/syncutil"
@@ -39,9 +39,6 @@ type FilterConfig struct {
 
 	// URL is the URL used to update the filter.
 	URL *url.URL
-
-	// ErrColl is used to collect non-critical and rare errors.
-	ErrColl errcoll.Interface
 
 	// DomainMetrics are the specific metrics for the domain filter.
 	DomainMetrics Metrics
@@ -96,7 +93,6 @@ type Filter struct {
 	domains          *atomic.Pointer[container.MapSet[string]]
 	refr             *refreshable.Refreshable
 	subDomainsPool   *syncutil.Pool[[]string]
-	errColl          errcoll.Interface
 	domainMtrc       Metrics
 	publicSuffixList cookiejar.PublicSuffixList
 	metrics          filter.Metrics
@@ -126,7 +122,6 @@ func NewFilter(c *FilterConfig) (f *Filter, err error) {
 	f = &Filter{
 		logger:  c.Logger,
 		domains: &atomic.Pointer[container.MapSet[string]]{},
-		errColl: c.ErrColl,
 		// #nosec G115 -- Assume that c.SubDomainNum is always less then or
 		// equal to 63.
 		//
@@ -225,12 +220,11 @@ func (f *Filter) Refresh(ctx context.Context) (err error) {
 	f.logger.InfoContext(ctx, "refresh started")
 	defer f.logger.InfoContext(ctx, "refresh finished")
 
+	// Do not report the error to the Sentry, as it will be reported by the
+	// filterstorage.
 	err = f.refresh(ctx, false)
-	if err != nil {
-		errcoll.Collect(ctx, f.errColl, f.logger, fmt.Sprintf("refreshing %q", f.catID), err)
-	}
 
-	return err
+	return errors.Annotate(err, "refreshing: %w")
 }
 
 // RefreshInitial loads the content of the filter, using cached files if any,
@@ -251,7 +245,7 @@ func (f *Filter) RefreshInitial(ctx context.Context) (err error) {
 // to load the list from its URL when there is already a file in the cache
 // directory, regardless of its staleness.
 func (f *Filter) refresh(ctx context.Context, acceptStale bool) (err error) {
-	var count int
+	var count uint64
 	defer func() {
 		// TODO(a.garipov):  Consider using [agdtime.Clock].
 		// TODO(a.garipov):  Consider using a prefix or a label for categories.
@@ -277,7 +271,7 @@ func (f *Filter) refresh(ctx context.Context, acceptStale bool) (err error) {
 }
 
 // resetDomains populates storage with domains from domainData.
-func (f *Filter) resetDomains(domainData []byte) (n int, err error) {
+func (f *Filter) resetDomains(domainData []byte) (n uint64, err error) {
 	next := container.NewMapSet[string]()
 
 	sc := bufio.NewScanner(bytes.NewReader(domainData))

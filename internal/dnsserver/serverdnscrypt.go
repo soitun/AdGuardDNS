@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -181,8 +182,10 @@ func (s *ServerDNSCrypt) startServeTCP(ctx context.Context) {
 	s.baseLogger.InfoContext(ctx, "starting listening tcp")
 
 	// TODO(ameshkov): Add context to the ServeTCP and ServeUDP methods in
-	// dnscrypt/v3.  Or at least add ServeTCPContext and ServeUDPContext
-	// methods for now.
+	// dnscrypt/v3.  Or at least add ServeTCPContext and ServeUDPContext methods
+	// for now.
+	//
+	// TODO(a.garipov):  Add ways to control the number of goroutines.
 	err := s.server.ServeTCP(s.tcpListener)
 	if err != nil {
 		s.baseLogger.WarnContext(ctx, "listening tcp failed", slogutil.KeyError, err)
@@ -207,6 +210,34 @@ func (s *ServerDNSCrypt) shutdown(ctx context.Context) (err error) {
 	return nil
 }
 
+// respondWithError logs the error, updates the metrics, generates an error
+// response and writes it.  msg is the logging message.  rw should not have been
+// written to.  All arguments must not be empty.
+//
+// TODO(a.garipov):  DRY with [ServerBase.respondWithError].
+func (s *ServerDNSCrypt) respondWithError(
+	ctx context.Context,
+	l *slog.Logger,
+	msg string,
+	req *dns.Msg,
+	rw dnscrypt.ResponseWriter,
+	reportedError error,
+) {
+	l.DebugContext(ctx, msg, slogutil.KeyError, reportedError)
+	s.metrics.OnError(ctx, reportedError)
+
+	resp := genErrorResponse(req, dns.RcodeServerFailure)
+	if isNonCriticalNetError(reportedError) {
+		addEDE(req, resp, dns.ExtendedErrorCodeNetworkError, "")
+	}
+
+	err := rw.WriteMsg(resp)
+	if err != nil {
+		s.metrics.OnError(ctx, err)
+		l.DebugContext(ctx, "writing error response", slogutil.KeyError, err)
+	}
+}
+
 // dnsCryptHandler is a dnscrypt.Handler implementation.
 type dnsCryptHandler struct {
 	srv *ServerDNSCrypt
@@ -216,25 +247,43 @@ type dnsCryptHandler struct {
 var _ dnscrypt.Handler = (*dnsCryptHandler)(nil)
 
 // ServeDNS processes the DNS query, implements dnscrypt.Handler.
-func (h *dnsCryptHandler) ServeDNS(rw dnscrypt.ResponseWriter, r *dns.Msg) (err error) {
+func (h *dnsCryptHandler) ServeDNS(rw dnscrypt.ResponseWriter, req *dns.Msg) (err error) {
 	defer func() { err = errors.Annotate(err, "dnscrypt: %w") }()
 
 	// TODO(ameshkov): Use the context from the arguments once it's added there.
-	ctx, cancel := h.srv.requestContext(context.Background())
+	ctx := context.Background()
+
+	// TODO(a.garipov):  Find a way to call this before the goroutine is
+	// created.
+	err = h.srv.activeRequestsSema.Acquire(ctx)
+	if err != nil {
+		h.srv.respondWithError(ctx, h.srv.baseLogger, errMsgActiveReqSema, req, rw, err)
+
+		return fmt.Errorf(errMsgActiveReqSema+": %w", err)
+	}
+	defer h.srv.activeRequestsSema.Release()
+
+	ctx, cancel := h.srv.reqCtx.New(ctx)
 	defer cancel()
+
+	ctx = ContextWithServerInfo(ctx, &ServerInfo{
+		Name:  h.srv.name,
+		Addr:  h.srv.addr,
+		Proto: h.srv.proto,
+	})
 
 	ctx = ContextWithRequestInfo(ctx, &RequestInfo{StartTime: time.Now()})
 
 	nrw := NewNonWriterResponseWriter(rw.LocalAddr(), rw.RemoteAddr())
-	written := h.srv.serveDNSMsg(ctx, r, nrw)
+	written := h.srv.serveDNSMsg(ctx, req, nrw)
 	if !written {
 		// If there was no response from the handler, return SERVFAIL.
-		return rw.WriteMsg(genErrorResponse(r, dns.RcodeServerFailure))
+		return rw.WriteMsg(genErrorResponse(req, dns.RcodeServerFailure))
 	}
 
 	network := NetworkFromAddr(rw.LocalAddr())
-	msg := nrw.Msg()
-	normalize(network, ProtoDNSCrypt, r, msg, dns.MaxMsgSize)
+	msg := nrw.Resp()
+	normalize(network, ProtoDNSCrypt, req, msg, dns.MaxMsgSize)
 
 	return rw.WriteMsg(msg)
 }

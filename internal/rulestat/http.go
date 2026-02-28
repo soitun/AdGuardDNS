@@ -16,6 +16,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/netutil"
+	"github.com/AdguardTeam/golibs/requestid"
 	"github.com/AdguardTeam/golibs/service"
 )
 
@@ -119,6 +120,11 @@ func (s *HTTP) Refresh(ctx context.Context) (err error) {
 	defer s.logger.InfoContext(ctx, "refresh finished")
 
 	defer func() { s.metrics.HandleUploadStatus(ctx, err) }()
+
+	_, ok := requestid.IDFromContext(ctx)
+	if !ok {
+		ctx = requestid.ContextWithRequestID(ctx, requestid.New())
+	}
 
 	err = s.refresh(ctx)
 	if err != nil {

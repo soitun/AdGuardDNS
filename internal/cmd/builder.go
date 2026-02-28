@@ -36,6 +36,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/filterstorage"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/hashprefix"
+	"github.com/AdguardTeam/AdGuardDNS/internal/filter/ruleliststorage"
 	"github.com/AdguardTeam/AdGuardDNS/internal/geoip"
 	"github.com/AdguardTeam/AdGuardDNS/internal/metrics"
 	"github.com/AdguardTeam/AdGuardDNS/internal/profiledb"
@@ -112,6 +113,7 @@ type builder struct {
 	// Keep them sorted.
 
 	access               *access.Global
+	activeReqSema        syncutil.Semaphore
 	adultBlocking        *hashprefix.Filter
 	adultBlockingHashes  *hashprefix.Storage
 	backendGRPCMtrc      backendpb.GRPCMetrics
@@ -139,6 +141,7 @@ type builder struct {
 	profileDB            profiledb.Interface
 	queryLog             querylog.Interface
 	rateLimit            *ratelimit.Backoff
+	ruleListStorage      *ruleliststorage.Default
 	ruleStat             rulestat.Interface
 	safeBrowsing         *hashprefix.Filter
 	safeBrowsingHashes   *hashprefix.Storage
@@ -315,7 +318,7 @@ type hashPrefixFilterInitFunc func(
 func (b *builder) initHashPrefixFilters(ctx context.Context) (err error) {
 	// TODO(a.garipov):  Make a separate max_size config for hashprefix filters.
 	maxSize := b.conf.Filters.MaxSize
-	cacheDir := b.env.FilterCachePath
+	cacheDir := path.Join(b.env.FilterCacheDir, filter.SubDirNameHashPrefix)
 
 	b.filterMtrc, err = metrics.NewFilter(b.mtrcNamespace, b.promRegisterer)
 	if err != nil {
@@ -716,7 +719,7 @@ func (b *builder) initStandardAccess(ctx context.Context) (err error) {
 		Logger:     b.baseLogger.With(slogutil.KeyPrefix, "standard_access_updater"),
 		Getter:     strg,
 		Setter:     stdAcc,
-		CacheDir:   b.env.FilterCachePath,
+		CacheDir:   b.env.FilterCacheDir,
 	})
 	if err != nil {
 		return fmt.Errorf("initializing standard access updater: %w", err)
@@ -749,10 +752,71 @@ func (b *builder) initStandardAccess(ctx context.Context) (err error) {
 	return nil
 }
 
+// initRuleListStorage initializes and refreshes the rule lists storage.  It
+// also adds the refresher with ID [ruleliststorage.StoragePrefix] to the debug
+// refreshers.  [builder.initHashPrefixFilters] must be called before this
+// method.
+func (b *builder) initRuleListStorage(ctx context.Context) (err error) {
+	c := b.conf.Filters
+	refrIvl := time.Duration(b.env.FilterRefreshIvl)
+	refrTimeout := time.Duration(c.RefreshTimeout)
+
+	b.ruleListStorage, err = ruleliststorage.New(&ruleliststorage.Config{
+		BaseLogger:   b.baseLogger,
+		CacheManager: b.cacheManager,
+		Clock:        timeutil.SystemClock{},
+		ErrColl:      b.errColl,
+		IndexConfig: &ruleliststorage.IndexConfig{
+			IndexURL: &b.env.FilterIndexURL.URL,
+			// TODO(a.garipov):  Consider adding a separate parameter here.
+			IndexMaxSize:        c.MaxSize,
+			MaxSize:             c.MaxSize,
+			IndexRefreshTimeout: time.Duration(c.IndexRefreshTimeout),
+			IndexStaleness:      refrIvl,
+			RefreshTimeout:      refrTimeout,
+			Staleness:           refrIvl,
+			ResultCacheCount:    c.RuleListCache.Size,
+			ResultCacheEnabled:  c.RuleListCache.Enabled,
+		},
+		Logger:   b.baseLogger.With(slogutil.KeyPrefix, ruleliststorage.StoragePrefix),
+		Metrics:  b.filterMtrc,
+		CacheDir: b.env.FilterCacheDir,
+	})
+	if err != nil {
+		return fmt.Errorf("creating default rule list storage: %w", err)
+	}
+
+	err = b.ruleListStorage.RefreshInitial(ctx)
+	if err != nil {
+		return fmt.Errorf("refreshing default rule list storage: %w", err)
+	}
+
+	refr := service.NewRefreshWorker(&service.RefreshWorkerConfig{
+		ContextConstructor: contextutil.NewTimeoutConstructor(refrTimeout),
+		ErrorHandler:       newSlogErrorHandler(b.baseLogger, "filters/ruleliststorage_refresh"),
+		Refresher:          b.ruleListStorage,
+		Schedule:           timeutil.NewConstSchedule(refrIvl),
+		RefreshOnShutdown:  false,
+	})
+	err = refr.Start(context.WithoutCancel(ctx))
+	if err != nil {
+		return fmt.Errorf("starting default rule list storage update: %w", err)
+	}
+
+	b.sigHdlr.AddService(refr)
+
+	b.debugRefrs[ruleliststorage.StoragePrefix] = b.ruleListStorage
+
+	b.logger.DebugContext(ctx, "initialized rule list storage")
+
+	return nil
+}
+
 // initFilterStorage initializes and refreshes the filter storage.  It also adds
 // the refresher with ID [filter.StoragePrefix] to the debug refreshers.
 //
-// [builder.initHashPrefixFilters] must be called before this method.
+// [builder.initHashPrefixFilters] and [builder.initRuleListStorage] must be
+// called before this method.
 func (b *builder) initFilterStorage(ctx context.Context) (err error) {
 	c := b.conf.Filters
 	refrIvl := time.Duration(c.RefreshIvl)
@@ -815,22 +879,6 @@ func (b *builder) initFilterStorage(ctx context.Context) (err error) {
 			Dangerous:       b.safeBrowsing,
 			NewlyRegistered: b.newRegDomains,
 		},
-		RuleListsIndex: &filterstorage.IndexConfig{
-			IndexURL: &b.env.FilterIndexURL.URL,
-			// TODO(a.garipov):  Consider adding a separate parameter here.
-			IndexMaxSize:        c.MaxSize,
-			MaxSize:             c.MaxSize,
-			IndexRefreshTimeout: time.Duration(c.IndexRefreshTimeout),
-			// TODO(a.garipov):  Consider adding a separate parameter here.
-			IndexStaleness: refrIvl,
-			RefreshTimeout: refrTimeout,
-			// TODO(a.garipov):  Consider adding a separate parameter here.
-			Staleness:          refrIvl,
-			ResultCacheCount:   c.RuleListCache.Size,
-			ResultCacheEnabled: c.RuleListCache.Enabled,
-			// TODO(a.garipov):  Consider making configurable.
-			Enabled: true,
-		},
 		SafeSearchGeneral: b.newSafeSearchConfig(
 			b.env.GeneralSafeSearchURL,
 			filter.IDGeneralSafeSearch,
@@ -846,7 +894,8 @@ func (b *builder) initFilterStorage(ctx context.Context) (err error) {
 		DomainMetrics:            domainMtrc,
 		ErrColl:                  b.errColl,
 		Metrics:                  b.filterMtrc,
-		CacheDir:                 b.env.FilterCachePath,
+		RuleListStorage:          b.ruleListStorage,
+		CacheDir:                 b.env.FilterCacheDir,
 		DomainFilterSubDomainNum: defaultSubDomainNum,
 	})
 	if err != nil {
@@ -910,9 +959,9 @@ func (b *builder) newSafeSearchConfig(
 
 // initFilteringGroups initializes the filtering groups.
 //
-// [builder.initFilterStorage] must be called before this method.
+// [builder.initRuleListStorage] must be called before this method.
 func (b *builder) initFilteringGroups(ctx context.Context) (err error) {
-	b.filteringGroups, err = b.conf.FilteringGroups.toInternal(b.filterStorage)
+	b.filteringGroups, err = b.conf.FilteringGroups.toInternal(ctx, b.ruleListStorage)
 	if err != nil {
 		return fmt.Errorf("initializing filtering groups: %w", err)
 	}
@@ -1780,6 +1829,8 @@ func (b *builder) initRateLimiter(ctx context.Context) (err error) {
 
 	b.sigHdlr.AddService(refr)
 
+	b.initActiveReqSema(c.ActiveRequestLimit)
+
 	err = b.initConnLimit(ctx, c.ConnectionLimit)
 	if err != nil {
 		return fmt.Errorf("connlimit: %w", err)
@@ -1794,7 +1845,18 @@ func (b *builder) initRateLimiter(ctx context.Context) (err error) {
 	return nil
 }
 
-// initConnLimit initializes the connection limiter from the given conf.
+// initActiveReqSema initializes the active-request semaphore from the given
+// conf.  conf must not be nil.
+func (b *builder) initActiveReqSema(conf *activeReqLimitConfig) {
+	if conf.Enabled {
+		b.activeReqSema = syncutil.NewChanSemaphore(conf.Max)
+	} else {
+		b.activeReqSema = syncutil.EmptySemaphore{}
+	}
+}
+
+// initConnLimit initializes the connection limiter from the given conf.  conf
+// must not be nil.
 func (b *builder) initConnLimit(ctx context.Context, conf *connLimitConfig) (err error) {
 	if !conf.Enabled {
 		return nil
@@ -1974,17 +2036,18 @@ func (b *builder) initDNS(ctx context.Context) (err error) {
 	}
 
 	dnsConf := &dnssvc.Config{
-		BaseLogger:           b.baseLogger,
-		Handlers:             dnsHdlrs,
-		Cloner:               b.cloner,
-		ControlConf:          b.controlConf,
-		ConnLimiter:          b.connLimit,
-		NonDNS:               b.webSvc.Handler(),
-		ErrColl:              b.errColl,
-		PrometheusRegisterer: b.promRegisterer,
-		MetricsNamespace:     b.mtrcNamespace,
-		ServerGroups:         b.serverGroups,
-		HandleTimeout:        time.Duration(b.conf.DNS.HandleTimeout),
+		BaseLogger:              b.baseLogger,
+		Handlers:                dnsHdlrs,
+		ActiveRequestsSemaphore: b.activeReqSema,
+		Cloner:                  b.cloner,
+		ControlConf:             b.controlConf,
+		ConnLimiter:             b.connLimit,
+		NonDNS:                  b.webSvc.Handler(),
+		ErrColl:                 b.errColl,
+		PrometheusRegisterer:    b.promRegisterer,
+		MetricsNamespace:        b.mtrcNamespace,
+		ServerGroups:            b.serverGroups,
+		HandleTimeout:           time.Duration(b.conf.DNS.HandleTimeout),
 	}
 
 	b.dnsSvc, err = dnssvc.New(dnsConf)
@@ -2083,10 +2146,11 @@ func (b *builder) mustStartDNS(ctx context.Context) {
 //   - [builder.initHashPrefixFilters]
 //   - [builder.initProfileDB]
 //   - [builder.initRateLimiter]
+//   - [builder.initRuleListStorage]
 //   - [builder.initRuleStat]
 //   - [builder.initWeb]
 func (b *builder) mustInitDebugSvc(ctx context.Context) {
-	debugSvcConf := b.env.debugConf(b.dnsDB, b.baseLogger)
+	debugSvcConf := b.env.debugConf(b.dnsDB, b.baseLogger, b.geoIP)
 	debugSvcConf.Manager = b.cacheManager
 	debugSvcConf.Refreshers = b.debugRefrs
 	debugSvc := debugsvc.New(debugSvcConf)

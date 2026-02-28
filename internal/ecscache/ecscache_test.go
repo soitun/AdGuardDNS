@@ -647,7 +647,7 @@ func exchange(
 	err := h.ServeDNS(ctx, nrw, req)
 	require.NoError(t, err)
 
-	msg := nrw.Msg()
+	msg := nrw.Resp()
 	require.NotNil(t, msg)
 
 	return msg

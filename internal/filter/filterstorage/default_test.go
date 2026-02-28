@@ -5,15 +5,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AdguardTeam/AdGuardDNS/internal/agdcache"
+	"github.com/AdguardTeam/AdGuardDNS/internal/agdtest"
 	"github.com/AdguardTeam/AdGuardDNS/internal/agdtime"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/custom"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/filterstorage"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/filtertest"
+	"github.com/AdguardTeam/AdGuardDNS/internal/filter/ruleliststorage"
 	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil/urlutil"
 	"github.com/AdguardTeam/golibs/testutil"
+	"github.com/AdguardTeam/golibs/timeutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,17 +71,28 @@ func TestNew(t *testing.T) {
 		name:          "safe_search_youtube",
 	}}
 
+	rlStorage, sErr := ruleliststorage.New(&ruleliststorage.Config{
+		BaseLogger:   testLogger,
+		CacheManager: agdcache.EmptyManager{},
+		Clock:        timeutil.SystemClock{},
+		ErrColl:      agdtest.NewErrorCollector(),
+		IndexConfig:  newRuleListIndexConfig(indexURL),
+		Logger:       testLogger,
+		Metrics:      filter.EmptyMetrics{},
+		CacheDir:     t.TempDir(),
+	})
+	require.NoError(t, sErr)
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			c := newDisabledConfig(t, newIndexConfig(indexURL), newIndexConfig(indexURL))
+			c := newDisabledConfig(t, rlStorage, newIndexConfig(indexURL))
 			c.BlockedServices = tc.services
-			c.RuleListsIndex = newIndexConfig(indexURL)
 			c.SafeSearchGeneral = tc.safeSearchGen
 			c.SafeSearchYouTube = tc.safeSearchYT
-			s, err := filterstorage.New(c)
 
+			s, err := filterstorage.New(c)
 			assert.NotNil(t, s)
 			assert.NoError(t, err)
 		})
@@ -107,8 +122,8 @@ func TestDefault_ForConfig_client(t *testing.T) {
 			newFltConfigSafeBrowsing(false, false),
 		)
 
-		conf.Custom.Enabled = true
-		conf.Custom.Filter = custom.New(&custom.Config{
+		conf.CustomFilter.Enabled = true
+		conf.CustomFilter.Filter = custom.New(&custom.Config{
 			Logger: slogutil.NewDiscardLogger(),
 			Rules:  []filter.RuleText{filtertest.RuleBlock},
 		})
@@ -301,10 +316,11 @@ func newFltConfigCli(
 	sbConf *filter.ConfigSafeBrowsing,
 ) (c *filter.ConfigClient) {
 	return &filter.ConfigClient{
-		Custom:       &filter.ConfigCustom{},
-		Parental:     pConf,
-		RuleList:     rlConf,
-		SafeBrowsing: sbConf,
+		CustomFilter:   &filter.ConfigCustomFilter{},
+		CustomRuleList: &filter.ConfigCustomRuleList{},
+		Parental:       pConf,
+		RuleList:       rlConf,
+		SafeBrowsing:   sbConf,
 	}
 }
 

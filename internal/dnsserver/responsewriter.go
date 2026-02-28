@@ -20,7 +20,9 @@ type ResponseWriter interface {
 
 	// WriteMsg writes a reply back to the client.  Handlers must not modify req
 	// and resp after the call to WriteMsg, since their ResponseWriter
-	// implementation may be a recorder.  req and resp must not be nil.
+	// implementation may be a recorder.  Implementations may ignore the context
+	// timeout and use their own pre-configured write timeout instead.  req and
+	// resp must not be nil.
 	//
 	// TODO(a.garipov):  Store bytes written to the socket.
 	WriteMsg(ctx context.Context, req, resp *dns.Msg) (err error)

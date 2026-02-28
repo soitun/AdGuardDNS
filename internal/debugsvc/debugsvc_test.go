@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
@@ -11,8 +12,11 @@ import (
 
 	"github.com/AdguardTeam/AdGuardDNS/internal/agdcache"
 	"github.com/AdguardTeam/AdGuardDNS/internal/agdhttp"
+	"github.com/AdguardTeam/AdGuardDNS/internal/agdtest"
 	"github.com/AdguardTeam/AdGuardDNS/internal/debugsvc"
+	"github.com/AdguardTeam/AdGuardDNS/internal/geoip"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
+	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/netutil/httputil"
 	"github.com/AdguardTeam/golibs/netutil/urlutil"
 	"github.com/AdguardTeam/golibs/testutil"
@@ -66,10 +70,51 @@ func TestService_Start(t *testing.T) {
 	cacheManager := agdcache.NewDefaultManager()
 	cacheManager.Add("test", agdcache.Empty[any, any]{})
 
+	const geoIPReqIP = "192.0.2.1"
+
+	geoIPLoc := &geoip.Location{
+		Country:        geoip.CountryAD,
+		Continent:      geoip.ContinentEU,
+		TopSubdivision: "TopSubdivision",
+		ASN:            42,
+	}
+
+	geoIPSubnet := netip.MustParsePrefix("198.51.100.0/24")
+
+	geoIP := agdtest.NewGeoIP()
+	geoIP.OnData = func(
+		_ context.Context,
+		host string,
+		addr netip.Addr,
+	) (l *geoip.Location, err error) {
+		pt := testutil.PanicT{}
+
+		require.Empty(pt, host)
+		require.Equal(pt, geoIPReqIP, addr.String())
+
+		return geoIPLoc, nil
+	}
+	geoIP.OnSubnetByLocation = func(
+		_ context.Context,
+		l *geoip.Location,
+		fam netutil.AddrFamily,
+	) (n netip.Prefix, err error) {
+		pt := testutil.PanicT{}
+
+		require.Equal(pt, geoIPLoc, l)
+
+		if fam == netutil.AddrFamilyIPv4 {
+			return geoIPSubnet, nil
+		}
+
+		return netip.Prefix{}, nil
+	}
+
 	c := &debugsvc.Config{
+		DNSDBHandler:   h,
+		GeoIP:          geoIP,
 		Logger:         slogutil.NewDiscardLogger(),
 		DNSDBAddr:      addr,
-		DNSDBHandler:   h,
 		Manager:        cacheManager,
 		Refreshers:     refreshers,
 		APIAddr:        addr,
@@ -176,6 +221,34 @@ func TestService_Start(t *testing.T) {
 
 	respBody = readRespBody(t, resp)
 	assert.JSONEq(t, clearResp, respBody)
+
+	// Check GeoIP API.
+	geoIPQuery := url.Values{}
+	geoIPQuery.Add(debugsvc.QueryKeyGeoIP, geoIPReqIP)
+
+	geoIPURL := srvURL.JoinPath(debugsvc.PathPatternDebugAPIGeoIP)
+	geoIPURL.RawQuery = geoIPQuery.Encode()
+
+	resp, err = client.Get(ctx, geoIPURL)
+	require.NoError(t, err)
+
+	const wantGeoIPResp = `
+		{
+		  "data": {
+			"192.0.2.1": {
+			  "asn": 42,
+			  "continent": "EU",
+			  "country": "AD",
+			  "top_subdivision": "TopSubdivision",
+			  "replacement_subnets": {
+				"ipv4": "198.51.100.0/24"
+			  }
+			}
+		  }
+		}`
+
+	respBody = readRespBody(t, resp)
+	assert.JSONEq(t, wantGeoIPResp, respBody)
 }
 
 // readRespBody is a helper function that reads and returns body from response.

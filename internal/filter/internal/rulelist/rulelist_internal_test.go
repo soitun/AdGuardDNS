@@ -103,8 +103,8 @@ func BenchmarkBaseFilter_SetURLFilterResult(b *testing.B) {
 	//	goarch: arm64
 	//	pkg: github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/rulelist
 	//	cpu: Apple M3
-	//	BenchmarkBaseFilter_SetURLFilterResult/blocked-8         	             1793678	        670.9 ns/op	      24 B/op	       1 allocs/op
-	//	BenchmarkBaseFilter_SetURLFilterResult/other-8           	             5599238	        222.0 ns/op	      24 B/op	       1 allocs/op
-	//	BenchmarkBaseFilter_SetURLFilterResult/blocked_with_cache-8         	38971425	        31.01 ns/op	       0 B/op	       0 allocs/op
-	//	BenchmarkBaseFilter_SetURLFilterResult/other_with_cache-8           	57606105	        21.05 ns/op	       0 B/op	       0 allocs/op
+	//	BenchmarkBaseFilter_SetURLFilterResult/blocked-8         	 1694581	       699.6 ns/op	      72 B/op	       2 allocs/op
+	//	BenchmarkBaseFilter_SetURLFilterResult/other-8           	 5033186	       237.3 ns/op	      72 B/op	       2 allocs/op
+	//	BenchmarkBaseFilter_SetURLFilterResult/blocked_with_cache-8         	37971027	        31.50 ns/op	       0 B/op	       0 allocs/op
+	//	BenchmarkBaseFilter_SetURLFilterResult/other_with_cache-8           	58549674	        20.87 ns/op	       0 B/op	       0 allocs/op
 }

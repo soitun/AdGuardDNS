@@ -207,7 +207,7 @@ func TestMiddleware_Wrap(t *testing.T) {
 
 			require.NoError(t, err)
 
-			m := nrw.Msg()
+			m := nrw.Resp()
 			assert.Equal(t, tc.resp, m)
 			assert.Equal(t, tc.wantNumReq, numReq)
 

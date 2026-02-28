@@ -15,7 +15,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Storage is the file-cache storage that encodes data using protobuf.
+// Storage is the file-cache storage that encodes data using protobuf.  Profiles
+// and devices are sorted before serialization.
 type Storage struct {
 	logger           *slog.Logger
 	baseCustomLogger *slog.Logger
@@ -94,7 +95,7 @@ func (s *Storage) Load(ctx context.Context) (c *internal.FileCache, err error) {
 		)
 	}
 
-	return fileCacheToInternal(fc, s.baseCustomLogger, s.profAccessCons, s.respSzEst)
+	return fileCacheToInternal(ctx, fc, s.logger, s.baseCustomLogger, s.profAccessCons, s.respSzEst)
 }
 
 // Store implements the [internal.FileCacheStorage] interface for *Storage.

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/AdguardTeam/AdGuardDNS/internal/agdcache"
-	"github.com/AdguardTeam/AdGuardDNS/internal/agdtest"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/domain"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
@@ -24,7 +23,6 @@ func NewDomainFilter(tb testing.TB, data string) (f *domain.Filter) {
 		Logger:           slogutil.NewDiscardLogger(),
 		CacheManager:     agdcache.EmptyManager{},
 		URL:              srvURL,
-		ErrColl:          agdtest.NewErrorCollector(),
 		DomainMetrics:    domain.EmptyMetrics{},
 		Metrics:          filter.EmptyMetrics{},
 		PublicSuffixList: publicsuffix.List,

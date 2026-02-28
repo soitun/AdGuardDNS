@@ -114,7 +114,7 @@ func (mw *Middleware) Wrap(next dnsserver.Handler) (wrapped dnsserver.Handler) {
 			return err
 		}
 
-		resp := nwrw.Msg()
+		resp := nwrw.Resp()
 
 		// Following RFC 6840, set the AD bit in the response only when the
 		// response is authenticated, and the request contained either a set DO

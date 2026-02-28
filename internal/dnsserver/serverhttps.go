@@ -222,6 +222,14 @@ func (s *ServerHTTPS) startHTTPSServer(ctx context.Context) (err error) {
 
 	// Create an instance of the HTTP server.
 	s.httpServer = &http.Server{
+		BaseContext: func(_ net.Listener) (baseCtx context.Context) {
+			return ContextWithServerInfo(context.Background(), &ServerInfo{
+				Name:  s.name,
+				Addr:  s.addr,
+				Proto: s.proto,
+			})
+		},
+
 		Handler:           handler,
 		ReadTimeout:       httpReadTimeout,
 		ReadHeaderTimeout: httpReadTimeout,
@@ -255,6 +263,13 @@ func (s *ServerHTTPS) startH3Server(ctx context.Context) (err error) {
 	// Create an instance of the HTTP/3 server.
 	s.h3Server = &http3.Server{
 		Handler: handler,
+		ConnContext: func(parent context.Context, _ *quic.Conn) (baseCtx context.Context) {
+			return ContextWithServerInfo(parent, &ServerInfo{
+				Name:  s.name,
+				Addr:  s.addr,
+				Proto: s.proto,
+			})
+		},
 	}
 
 	// Start the server worker goroutine.
@@ -399,7 +414,7 @@ func (h *httpHandler) remoteAddr(r *http.Request) (addr net.Addr) {
 // the DNS data from the request, resolves it, and sends a response.
 func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	ctx, cancel := h.srv.requestContext(ctx)
+	ctx, cancel := h.srv.reqCtx.New(ctx)
 	defer cancel()
 
 	defer h.srv.handlePanicAndRecover(ctx)
@@ -423,8 +438,11 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serveDoH processes the incoming DNS message and writes the response back to
 // the client.
+//
+// TODO(a.garipov):  Consider not writing original errors' messages to the
+// response.
 func (h *httpHandler) serveDoH(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	m, err := httpRequestToMsg(r)
+	buf, err := httpRequestToMsg(r)
 	if err != nil {
 		h.srv.metrics.OnInvalidMsg(ctx)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -432,26 +450,36 @@ func (h *httpHandler) serveDoH(ctx context.Context, w http.ResponseWriter, r *ht
 		return
 	}
 
-	rAddr := h.remoteAddr(r)
-	lAddr := h.localAddr
-	rw := NewNonWriterResponseWriter(lAddr, rAddr)
+	rw := NewNonWriterResponseWriter(h.localAddr, h.remoteAddr(r))
 	ctx = addRequestInfo(ctx, r)
 
-	// Serve the query
-	written := h.srv.serveDNS(ctx, m, rw)
+	req := &dns.Msg{}
+	err = req.Unpack(buf)
+	if err != nil {
+		h.srv.metrics.OnInvalidMsg(ctx)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 
-	// If no response were written, indicate it via an internal server error.
+		return
+	}
+
+	// TODO(a.garipov):  Find a way to call this before the goroutine is
+	// created.
+	err = h.srv.activeRequestsSema.Acquire(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+	defer h.srv.activeRequestsSema.Release()
+
+	written := h.srv.serveDNSMsg(ctx, req, rw)
 	if !written {
 		http.Error(w, "No response", http.StatusInternalServerError)
 
 		return
 	}
 
-	// Get the response that has been written.
-	resp := rw.Msg()
-	req := rw.req
-
-	// Write the response to the client
+	resp := rw.Resp()
 	err = h.writeResponse(req, resp, r, w)
 	if err != nil {
 		// Try writing an error response just in case.

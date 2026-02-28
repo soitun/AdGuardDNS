@@ -57,7 +57,7 @@ func (mw *Middleware) recordQueryInfo(
 		RequestResult:  fctx.requestResult,
 		ResponseResult: fctx.responseResult,
 		Time:           start,
-		RequestID:      ri.ID,
+		AccountID:      prof.AccountID,
 		ProfileID:      prof.ID,
 		DeviceID:       devID,
 		ClientCountry:  reqCtry,
@@ -66,6 +66,7 @@ func (mw *Middleware) recordQueryInfo(
 		ClientASN:      reqASN,
 		RequestType:    ri.QType,
 		Protocol:       ri.ServerInfo.Protocol,
+		Stream:         prof.QueryLogStream,
 	}
 
 	mw.writeQueryLogEntry(ctx, fctx, ri, e, blocked, prof.IPLogEnabled)

@@ -17,6 +17,9 @@ import (
 
 // rateLimitConfig is the configuration of the instance's rate limiting.
 type rateLimitConfig struct {
+	// ActiveRequestLimit is the configuration for the limit on active requests.
+	ActiveRequestLimit *activeReqLimitConfig `yaml:"active_request_limit"`
+
 	// AllowList is the allowlist of clients.
 	Allowlist *allowListConfig `yaml:"allowlist"`
 
@@ -122,6 +125,7 @@ func (c *rateLimitConfig) Validate() (err error) {
 		validate.Positive("response_size_estimate", c.ResponseSizeEstimate),
 	}
 
+	errs = validate.Append(errs, "active_request_limit", c.ActiveRequestLimit)
 	errs = validate.Append(errs, "allowlist", c.Allowlist)
 	errs = validate.Append(errs, "connection_limit", c.ConnectionLimit)
 	errs = validate.Append(errs, "ipv4", c.IPv4)
@@ -157,6 +161,33 @@ func (c *allowListConfig) Validate() (err error) {
 	}
 
 	return validate.Positive("refresh_interval", c.RefreshIvl)
+}
+
+// activeReqLimitConfig is the configuration structure for the active-request
+// limiter.
+type activeReqLimitConfig struct {
+	// Max is the maximum number of simultaneously processed requests.  Once the
+	// number of active requests reaches this limit, new requests wait for the
+	// number to decrease.
+	Max uint `yaml:"max"`
+
+	// Enabled, if true, enables active-request limiting.
+	Enabled bool `yaml:"enabled"`
+}
+
+// type check
+var _ validate.Interface = (*activeReqLimitConfig)(nil)
+
+// Validate implements the [validate.Interface] interface for
+// *activeReqLimitConfig.
+func (c *activeReqLimitConfig) Validate() (err error) {
+	if c == nil {
+		return errors.ErrNoValue
+	} else if !c.Enabled {
+		return nil
+	}
+
+	return validate.Positive("max", c.Max)
 }
 
 // connLimitConfig is the configuration structure for the stream-connection

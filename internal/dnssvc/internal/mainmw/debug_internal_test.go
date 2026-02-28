@@ -255,7 +255,7 @@ func TestMiddleware_writeDebugResponse(t *testing.T) {
 			writeErr := mw.writeDebugResponse(ctx, fctx, rw)
 			require.NoError(t, writeErr)
 
-			msg := rw.Msg()
+			msg := rw.Resp()
 			require.NotNil(t, msg)
 
 			assert.Equal(t, tc.wantExtra, msg.Extra)

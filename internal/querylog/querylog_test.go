@@ -10,9 +10,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-// testRequestID is the common request ID for tests.
-var testRequestID = agd.NewRequestID()
-
 // testEntry returns an entry for tests.
 func testEntry() (e *querylog.Entry) {
 	return &querylog.Entry{
@@ -22,7 +19,7 @@ func testEntry() (e *querylog.Entry) {
 		},
 		ResponseResult:  nil,
 		Time:            time.Unix(123, 0),
-		RequestID:       testRequestID,
+		AccountID:       1234,
 		ProfileID:       "prof1234",
 		DeviceID:        "dev1234",
 		ClientCountry:   geoip.CountryRU,
@@ -34,5 +31,6 @@ func testEntry() (e *querylog.Entry) {
 		RequestType:     dns.TypeA,
 		ResponseCode:    dns.RcodeSuccess,
 		DNSSEC:          true,
+		Stream:          true,
 	}
 }

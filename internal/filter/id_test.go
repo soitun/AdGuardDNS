@@ -1,6 +1,7 @@
 package filter_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -52,8 +53,10 @@ func TestNewID(t *testing.T) {
 func TestNewRuleText(t *testing.T) {
 	t.Parallel()
 
-	tooLong := strings.Repeat("a", filter.MaxRuleTextRuneLen+1)
-	tooLongUnicode := strings.Repeat("ы", filter.MaxRuleTextRuneLen+1)
+	const tooLongLen = filter.MaxRuleTextRuneLen + 1
+
+	tooLong := strings.Repeat("a", tooLongLen)
+	tooLongUnicode := strings.Repeat("ы", tooLongLen)
 
 	testCases := []struct {
 		name       string
@@ -72,14 +75,23 @@ func TestNewRuleText(t *testing.T) {
 		in:         "",
 		wantErrMsg: "",
 	}, {
-		name:       "too_long",
-		in:         tooLong,
-		wantErrMsg: `bad filter rule text "` + tooLong + `": too long: got 1025 runes, max 1024`,
+		name: "too_long",
+		in:   tooLong,
+		wantErrMsg: fmt.Sprintf(
+			"bad filter rule text %q: too long: got %d runes, max %d",
+			tooLong,
+			tooLongLen,
+			filter.MaxRuleTextRuneLen,
+		),
 	}, {
 		name: "too_long_unicode",
 		in:   tooLongUnicode,
-		wantErrMsg: `bad filter rule text "` + tooLongUnicode + `": too long: ` +
-			`got 1025 runes, max 1024`,
+		wantErrMsg: fmt.Sprintf(
+			"bad filter rule text %q: too long: got %d runes, max %d",
+			tooLongUnicode,
+			tooLongLen,
+			filter.MaxRuleTextRuneLen,
+		),
 	}}
 
 	for _, tc := range testCases {

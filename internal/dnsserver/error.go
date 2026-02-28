@@ -36,7 +36,10 @@ type WriteError struct {
 	// Err is the underlying error.
 	Err error
 
-	// Protocol is either "tcp" or "udp".
+	// Protocol is one of the following:
+	//   - "quic",
+	//   - "tcp",
+	//   - "udp".
 	Protocol string
 }
 
@@ -68,8 +71,11 @@ func isNonCriticalNetError(err error) (ok bool) {
 	}
 
 	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
 
-	return errors.As(err, &netErr) && netErr.Timeout()
+	return false
 }
 
 // closeWithLog closes c and logs a debug message if c.Close returns an error
@@ -82,4 +88,33 @@ func closeWithLog(ctx context.Context, l *slog.Logger, msg string, c io.Closer) 
 	if err != nil && !errors.Is(err, net.ErrClosed) {
 		l.DebugContext(ctx, msg, slogutil.KeyError, err)
 	}
+}
+
+// callOnError calls f if recovered or err is not nil.  Additionally, if
+// recovered is not nil, it repanics.  f must not be nil.
+//
+// TODO(a.garipov):  Consider moving to golibs.
+func callOnError(f func(), recovered any, err error) {
+	panicked := recovered != nil
+	if panicked || err != nil {
+		f()
+	}
+
+	if panicked {
+		panic(recovered)
+	}
+}
+
+// closeOnError closes c if recovered or err is not nil.  Additionally, if
+// recovered is not nil, it repanics.  l is used to log the error from c.Close.
+// l and c must not be nil.
+func closeOnError(ctx context.Context, l *slog.Logger, c io.Closer, recovered any, err error) {
+	f := func() {
+		closeErr := c.Close()
+		if closeErr != nil {
+			l.DebugContext(ctx, "deferred closing", slogutil.KeyError, closeErr)
+		}
+	}
+
+	callOnError(f, recovered, err)
 }

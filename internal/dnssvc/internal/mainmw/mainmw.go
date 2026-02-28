@@ -123,18 +123,16 @@ func (mw *Middleware) Wrap(next dnsserver.Handler) (wrapped dnsserver.Handler) {
 		defer mw.fltCtxPool.Put(fctx)
 
 		ri := agd.MustRequestInfoFromContext(ctx)
-		optslog.Trace2(
+		optslog.Trace1(
 			ctx,
 			mw.logger,
 			"processing request",
-			"req_id", ri.ID,
 			"remote_ip", ri.RemoteIP,
 		)
-		defer optslog.Trace2(
+		defer optslog.Trace1(
 			ctx,
 			mw.logger,
 			"finished processing request",
-			"req_id", ri.ID,
 			"remote_ip", ri.RemoteIP,
 		)
 
@@ -155,7 +153,7 @@ func (mw *Middleware) Wrap(next dnsserver.Handler) (wrapped dnsserver.Handler) {
 			return err
 		}
 
-		fctx.originalResponse = nwrw.Msg()
+		fctx.originalResponse = nwrw.Resp()
 		mw.filterResponse(ctx, fctx, flt, ri)
 
 		mw.reportMetrics(ctx, fctx, ri)
@@ -194,6 +192,14 @@ func (mw *Middleware) filter(ctx context.Context, ri *agd.RequestInfo) (f filter
 	if p.FilteringEnabled && d.FilteringEnabled {
 		return mw.fltStrg.ForConfig(ctx, p.FilterConfig)
 	}
+
+	optslog.Trace2(
+		ctx,
+		mw.logger,
+		"filtering disabled for profile or device",
+		"dev_id", d.ID,
+		"prof_id", p.ID,
+	)
 
 	return mw.fltStrg.ForConfig(ctx, nil)
 }

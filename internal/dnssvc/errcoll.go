@@ -19,7 +19,7 @@ type errCollMetricsListener struct {
 // type check
 var _ dnsserver.MetricsListener = (*errCollMetricsListener)(nil)
 
-// OnRequest implements the dnsserver.MetricsListener interface for
+// OnRequest implements the [dnsserver.MetricsListener] interface for
 // *errCollMetricsListener.
 func (s *errCollMetricsListener) OnRequest(
 	ctx context.Context,
@@ -29,19 +29,19 @@ func (s *errCollMetricsListener) OnRequest(
 	s.baseListener.OnRequest(ctx, info, rw)
 }
 
-// OnInvalidMsg implements the dnsserver.MetricsListener interface for
+// OnInvalidMsg implements the [dnsserver.MetricsListener] interface for
 // *errCollMetricsListener.
 func (s *errCollMetricsListener) OnInvalidMsg(ctx context.Context) {
 	s.baseListener.OnInvalidMsg(ctx)
 }
 
-// OnQUICAddressValidation implements the dnsserver.MetricsListener interface
+// OnQUICAddressValidation implements the [dnsserver.MetricsListener] interface
 // for *errCollMetricsListener.
 func (s *errCollMetricsListener) OnQUICAddressValidation(hit bool) {
 	s.baseListener.OnQUICAddressValidation(hit)
 }
 
-// OnPanic implements the dnsserver.MetricsListener interface for
+// OnPanic implements the [dnsserver.MetricsListener] interface for
 // *errCollMetricsListener.
 func (s *errCollMetricsListener) OnPanic(ctx context.Context, v any) {
 	err, ok := v.(error)
@@ -53,9 +53,15 @@ func (s *errCollMetricsListener) OnPanic(ctx context.Context, v any) {
 	s.baseListener.OnPanic(ctx, v)
 }
 
-// OnError implements the dnsserver.MetricsListener interface for
+// OnError implements the [dnsserver.MetricsListener] interface for
 // *errCollMetricsListener.
 func (s *errCollMetricsListener) OnError(ctx context.Context, err error) {
 	s.errColl.Collect(ctx, err)
 	s.baseListener.OnError(ctx, err)
+}
+
+// AdjustCurrentRequestsNumber implements the [dnsserver.MetricsListener] interface
+// for *errCollMetricsListener.
+func (s *errCollMetricsListener) AdjustActiveRequests(ctx context.Context, num int) {
+	s.baseListener.AdjustActiveRequests(ctx, num)
 }

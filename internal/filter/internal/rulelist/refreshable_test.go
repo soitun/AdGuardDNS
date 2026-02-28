@@ -23,7 +23,7 @@ func TestRefreshable_RulesCount(t *testing.T) {
 		rulelist.EmptyResultCache{},
 	)
 
-	assert.Equal(t, 1, rl.RulesCount())
+	assert.Equal(t, uint64(1), rl.RulesCount())
 }
 
 func TestRefreshable_SetURLFilterResult_cache(t *testing.T) {
@@ -107,7 +107,7 @@ func TestRefreshable_Refresh(t *testing.T) {
 	err = rl.Refresh(ctx, false)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, rl.RulesCount())
+	assert.Equal(t, uint64(1), rl.RulesCount())
 
 	ctx = testutil.ContextWithTimeout(t, filtertest.Timeout)
 	req := &urlfilter.DNSRequest{

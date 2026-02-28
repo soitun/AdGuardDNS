@@ -224,6 +224,24 @@ func (f *Filter) FilterResponse(
 	return f.OnFilterResponse(ctx, resp)
 }
 
+// NewFilter returns a new *Filter all methods of which panic.
+func NewFilter() (f *Filter) {
+	return &Filter{
+		OnFilterRequest: func(
+			ctx context.Context,
+			req *filter.Request,
+		) (r filter.Result, err error) {
+			panic(testutil.UnexpectedCall(ctx, req))
+		},
+		OnFilterResponse: func(
+			ctx context.Context,
+			resp *filter.Response,
+		) (r filter.Result, err error) {
+			panic(testutil.UnexpectedCall(ctx, resp))
+		},
+	}
+}
+
 // type check
 var _ filter.HashMatcher = (*HashMatcher)(nil)
 

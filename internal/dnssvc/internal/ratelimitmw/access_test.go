@@ -182,7 +182,7 @@ func TestMiddleware_Wrap_access(t *testing.T) {
 			err := h.ServeDNS(ctx, rw, req)
 			require.NoError(t, err)
 
-			resp := rw.Msg()
+			resp := rw.Resp()
 			tc.wantResp(t, resp != nil)
 		})
 	}

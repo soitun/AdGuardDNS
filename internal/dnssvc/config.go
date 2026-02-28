@@ -22,6 +22,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/profiledb"
 	"github.com/AdguardTeam/AdGuardDNS/internal/querylog"
 	"github.com/AdguardTeam/AdGuardDNS/internal/rulestat"
+	"github.com/AdguardTeam/golibs/syncutil"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -40,6 +41,10 @@ type Config struct {
 	// TODO(a.garipov):  This is only used for tests.  Replace with a
 	// [netext.ListenConfig].
 	NewListener NewListenerFunc
+
+	// ActiveRequestsSemaphore allows limiting the number of requests processed
+	// simultaneously.  It must not be nil.
+	ActiveRequestsSemaphore syncutil.Semaphore
 
 	// Cloner is used to clone messages more efficiently by disposing of parts
 	// of DNS responses for later reuse.  It must not be nil.

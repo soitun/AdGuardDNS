@@ -113,6 +113,7 @@ func newBlockPageServers(
 	}
 
 	srvHdrMw := httputil.ServerHeaderMiddleware(agdhttp.UserAgent())
+	reqIDMw := httputil.NewRequestIDMiddleware()
 	handler := srv.blockPageHandler()
 
 	for _, b := range srv.bind {
@@ -120,6 +121,7 @@ func newBlockPageServers(
 		h := httputil.Wrap(
 			handler,
 			srvHdrMw,
+			reqIDMw,
 			httputil.NewLogMiddleware(logger, slog.LevelDebug),
 		)
 

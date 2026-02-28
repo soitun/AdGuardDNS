@@ -161,8 +161,9 @@ func TestProfileStorage_NewProfile(t *testing.T) {
 		t.Parallel()
 
 		dp := &DNSProfile{
-			DnsId:   TestProfileIDStr,
-			Deleted: true,
+			AccountIdInt: 1,
+			DnsId:        TestProfileIDStr,
+			Deleted:      true,
 		}
 
 		got, gotDevices, gotDevChg, err := profileStorage.newProfile(ctx, dp, true)
@@ -578,9 +579,13 @@ func NewTestDNSProfile(tb testing.TB) (dp *DNSProfile) {
 				WeeklyRange: week,
 			},
 		},
-		RuleLists: &RuleListsSettings{
+		CustomRuleLists: &CustomRuleListsSettings{
 			Enabled: true,
 			Ids:     []string{"1"},
+		},
+		RuleLists: &RuleListsSettings{
+			Enabled: true,
+			Ids:     []string{"2"},
 		},
 		Devices:             devices,
 		CustomRules:         []string{"||example.org^"},
@@ -635,7 +640,7 @@ func NewTestDNSProfile(tb testing.TB) (dp *DNSProfile) {
 			Ids:     []string{"games"},
 			Enabled: true,
 		},
-		AccountId: TestAccountIDStr,
+		AccountIdInt: int32(TestAccountID),
 	}
 }
 
@@ -662,7 +667,7 @@ func newProfile(tb testing.TB) (p *agd.Profile) {
 		End:   60,
 	}
 
-	wantCustomFilter := &filter.ConfigCustom{
+	wantCustomFilter := &filter.ConfigCustomFilter{
 		Filter: custom.New(&custom.Config{
 			Logger: slogutil.NewDiscardLogger(),
 			Rules:  []filter.RuleText{"||example.org^"},
@@ -698,8 +703,13 @@ func newProfile(tb testing.TB) (p *agd.Profile) {
 		SafeSearchYouTubeEnabled: false,
 	}
 
-	wantRuleList := &filter.ConfigRuleList{
+	wantCustomRuleList := &filter.ConfigCustomRuleList{
 		IDs:     []filter.ID{"1"},
+		Enabled: true,
+	}
+
+	wantRuleList := &filter.ConfigRuleList{
+		IDs:     []filter.ID{"2"},
 		Enabled: true,
 	}
 
@@ -765,10 +775,11 @@ func newProfile(tb testing.TB) (p *agd.Profile) {
 
 	return &agd.Profile{
 		FilterConfig: &filter.ConfigClient{
-			Custom:       wantCustomFilter,
-			Parental:     wantParental,
-			RuleList:     wantRuleList,
-			SafeBrowsing: wantSafeBrowsing,
+			CustomFilter:   wantCustomFilter,
+			CustomRuleList: wantCustomRuleList,
+			Parental:       wantParental,
+			RuleList:       wantRuleList,
+			SafeBrowsing:   wantSafeBrowsing,
 		},
 		Access:                   wantAccess,
 		AdultBlockingMode:        wantAdultBlockingMode,

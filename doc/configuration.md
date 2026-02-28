@@ -159,6 +159,18 @@ The `connection_limit` object has the following properties:
 
 See also [notes on these parameters](#recommended-connection_limit).
 
+### <a href="#ratelimit-active_request_limit" id="ratelimit-active_request_limit" name="ratelimit-active_request_limit">Active request limit</a>
+
+The `active_request_limit` object has the following properties:
+
+- <a href="#ratelimit-active_request_limit-enabled" id="ratelimit-active_request_limit-enabled" name="ratelimit-active_request_limit-enabled">`enabled`</a>: Whether or not the active request limit should be enforced.
+
+    **Example:** `true`.
+
+- <a href="#ratelimit-active_request_limit-max" id="ratelimit-active_request_limit-max" name="ratelimit-active_request_limit-max">`max`</a>: The maximum number of simultaneously processed requests. Once the number of active requests reaches this limit, new requests wait for the number to decrease.
+
+    **Example:** `10000`.
+
 ### <a href="#ratelimit-quic" id="ratelimit-quic" name="ratelimit-quic">QUIC rate limiting</a>
 
 The `quic` object has the following properties:
@@ -294,7 +306,7 @@ The `dns` object has the following properties:
 
     **Example:** `2s`.
 
-- <a href="#dns-handle_timeout" id="dns-handle_timeout" name="dns-handle_timeout">`handle_timeout`</a>: The timeout for the entire handling of a single query, as a human-readable duration.
+- <a href="#dns-handle_timeout" id="dns-handle_timeout" name="dns-handle_timeout">`handle_timeout`</a>: The timeout for the entire handling of a single query, as a human-readable duration. It doesn't affect writing to a connection.
 
     **Example:** `1s`.
 

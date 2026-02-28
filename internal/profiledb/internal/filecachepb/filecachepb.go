@@ -2,6 +2,8 @@
 package filecachepb
 
 import (
+	"cmp"
+	"context"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -20,20 +22,23 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal"
 	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/errors"
+	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/c2h5oh/datasize"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// toInternal converts the protobuf-encoded data into a cache structure.  fc
+// toInternal converts the protobuf-encoded data into a cache structure.  fc, l,
 // baseCustomLogger, and cons must not be nil.
 func toInternal(
+	ctx context.Context,
 	fc *FileCache,
+	l *slog.Logger,
 	baseCustomLogger *slog.Logger,
 	cons *access.ProfileConstructor,
 	respSzEst datasize.ByteSize,
 ) (c *internal.FileCache, err error) {
-	profiles, err := profilesToInternal(fc.Profiles, baseCustomLogger, cons, respSzEst)
+	profiles, err := profilesToInternal(ctx, fc.Profiles, l, baseCustomLogger, cons, respSzEst)
 	if err != nil {
 		return nil, fmt.Errorf("converting profiles: %w", err)
 	}
@@ -53,6 +58,14 @@ func toInternal(
 
 // toProtobuf converts the cache structure into protobuf structure for encoding.
 func toProtobuf(c *internal.FileCache) (pbFileCache *FileCache) {
+	slices.SortFunc(c.Profiles, func(a, b *agd.Profile) (res int) {
+		return cmp.Compare(a.ID, b.ID)
+	})
+
+	slices.SortFunc(c.Devices, func(a, b *agd.Device) (res int) {
+		return cmp.Compare(a.ID, b.ID)
+	})
+
 	return &FileCache{
 		SyncTime: timestamppb.New(c.SyncTime),
 		Profiles: profilesToProtobuf(c.Profiles),
@@ -62,9 +75,11 @@ func toProtobuf(c *internal.FileCache) (pbFileCache *FileCache) {
 }
 
 // profilesToInternal converts protobuf profile structures into internal ones.
-// baseCustomLogger and cons must not be nil.
+// l, baseCustomLogger and cons must not be nil.
 func profilesToInternal(
+	ctx context.Context,
 	pbProfiles []*Profile,
+	l *slog.Logger,
 	baseCustomLogger *slog.Logger,
 	cons *access.ProfileConstructor,
 	respSzEst datasize.ByteSize,
@@ -72,7 +87,7 @@ func profilesToInternal(
 	profiles = make([]*agd.Profile, 0, len(pbProfiles))
 	for i, pbProf := range pbProfiles {
 		var prof *agd.Profile
-		prof, err = pbProf.toInternal(baseCustomLogger, cons, respSzEst)
+		prof, err = pbProf.toInternal(ctx, l, baseCustomLogger, cons, respSzEst)
 		if err != nil {
 			return nil, fmt.Errorf("profile at index %d: %w", i, err)
 		}
@@ -83,13 +98,28 @@ func profilesToInternal(
 	return profiles, nil
 }
 
-// toInternal converts a protobuf profile structure to an internal one.
+// toInternal converts a protobuf profile structure to an internal one. l,
 // baseCustomLogger and cons must not be nil.
 func (x *Profile) toInternal(
+	ctx context.Context,
+	l *slog.Logger,
 	baseCustomLogger *slog.Logger,
 	cons *access.ProfileConstructor,
 	respSzEst datasize.ByteSize,
 ) (prof *agd.Profile, err error) {
+	var accID agd.AccountID
+	accID, err = newAccountIDFromProtobuf(x)
+	if err != nil {
+		// For full compatibility with existing cache, do not fail profile
+		// parsing because of an invalid account ID.
+		l.WarnContext(
+			ctx,
+			"failed to parse account id, using default",
+			slogutil.KeyError, err,
+			"profile_id", x.ProfileId,
+		)
+	}
+
 	adultBlockingMode, err := adultBlockingModeToInternal(x.AdultBlockingMode)
 	if err != nil {
 		return nil, fmt.Errorf("adult blocking mode: %w", err)
@@ -133,9 +163,16 @@ func (x *Profile) toInternal(
 	}
 
 	fltConf := &filter.ConfigClient{
-		Custom: &filter.ConfigCustom{
+		CustomFilter: &filter.ConfigCustomFilter{
 			Filter:  flt,
 			Enabled: pbFltConf.Custom.Enabled,
+		},
+		CustomRuleList: &filter.ConfigCustomRuleList{
+			// Consider custom rule-list IDs to have been prevalidated.
+			IDs: agdprotobuf.UnsafelyConvertStrSlice[string, filter.ID](
+				pbFltConf.GetCustomRuleList().GetIds(),
+			),
+			Enabled: pbFltConf.GetCustomRuleList().GetEnabled(),
 		},
 		Parental: &filter.ConfigParental{
 			Categories:    categoriesToInternal(pbFltConf),
@@ -171,7 +208,7 @@ func (x *Profile) toInternal(
 		SafeBrowsingBlockingMode: safeBrowsingBlockingMode,
 		Ratelimiter:              x.Ratelimiter.toInternal(respSzEst),
 
-		AccountID: agd.AccountID(x.AccountId),
+		AccountID: accID,
 		ID:        agd.ProfileID(x.ProfileId),
 
 		// Consider device IDs to have been prevalidated.
@@ -190,7 +227,18 @@ func (x *Profile) toInternal(
 		FilteringEnabled:    x.FilteringEnabled,
 		IPLogEnabled:        x.IpLogEnabled,
 		QueryLogEnabled:     x.QueryLogEnabled,
+		QueryLogStream:      x.QueryLogStream,
 	}, nil
+}
+
+// newAccountIDFromProtobuf extracts and validates account ID from protobuf
+// profile.  pbProf must not be nil.
+func newAccountIDFromProtobuf(pbProf *Profile) (id agd.AccountID, err error) {
+	if pbProf.AccountIdInt != 0 {
+		return agd.NewAccountID(pbProf.AccountIdInt)
+	}
+
+	return agd.NewAccountIDFromString(pbProf.AccountId)
 }
 
 // categoriesToInternal converts filter config's protobuf category filter to
@@ -421,7 +469,7 @@ func (x *CustomDomainConfig) toInternal() (c *agd.CustomDomainConfig, err error)
 
 	return &agd.CustomDomainConfig{
 		State:   state,
-		Domains: slices.Clone(x.Domains),
+		Domains: x.Domains,
 	}, nil
 }
 
@@ -594,6 +642,9 @@ func profileToProtobuf(p *agd.Profile) (pbProf *Profile) {
 		}
 	}()
 
+	deviceIDs := agdprotobuf.UnsafelyConvertStrSlice[agd.DeviceID, string](p.DeviceIDs.Values())
+	slices.Sort(deviceIDs)
+
 	return &Profile{
 		CustomDomains:            customDomainsToProtobuf(p.CustomDomains),
 		FilterConfig:             filterConfigToProtobuf(p.FilterConfig),
@@ -602,20 +653,18 @@ func profileToProtobuf(p *agd.Profile) (pbProf *Profile) {
 		BlockingMode:             blockingModeToProtobuf(p.BlockingMode),
 		SafeBrowsingBlockingMode: safeBrowsingBlockingModeToProtobuf(p.SafeBrowsingBlockingMode),
 		Ratelimiter:              ratelimiterToProtobuf(p.Ratelimiter.Config()),
-		AccountId:                string(p.AccountID),
+		AccountIdInt:             int32(p.AccountID),
 		ProfileId:                string(p.ID),
-		DeviceIds: agdprotobuf.UnsafelyConvertStrSlice[agd.DeviceID, string](
-			p.DeviceIDs.Values(),
-		),
-		FilteredResponseTtl: durationpb.New(p.FilteredResponseTTL),
-		AutoDevicesEnabled:  p.AutoDevicesEnabled,
-		BlockChromePrefetch: p.BlockChromePrefetch,
-		BlockFirefoxCanary:  p.BlockFirefoxCanary,
-		BlockPrivateRelay:   p.BlockPrivateRelay,
-		Deleted:             p.Deleted,
-		FilteringEnabled:    p.FilteringEnabled,
-		IpLogEnabled:        p.IPLogEnabled,
-		QueryLogEnabled:     p.QueryLogEnabled,
+		DeviceIds:                deviceIDs,
+		FilteredResponseTtl:      durationpb.New(p.FilteredResponseTTL),
+		AutoDevicesEnabled:       p.AutoDevicesEnabled,
+		BlockChromePrefetch:      p.BlockChromePrefetch,
+		BlockFirefoxCanary:       p.BlockFirefoxCanary,
+		BlockPrivateRelay:        p.BlockPrivateRelay,
+		Deleted:                  p.Deleted,
+		FilteringEnabled:         p.FilteringEnabled,
+		IpLogEnabled:             p.IPLogEnabled,
+		QueryLogEnabled:          p.QueryLogEnabled,
 	}
 }
 
@@ -673,7 +722,7 @@ func customDomainConfigsToProtobuf(
 
 		pbConfs = append(pbConfs, &CustomDomainConfig{
 			State:   state,
-			Domains: slices.Clone(c.Domains),
+			Domains: c.Domains,
 		})
 	}
 
@@ -683,8 +732,8 @@ func customDomainConfigsToProtobuf(
 // filterConfigToProtobuf converts the filtering configuration to protobuf.
 func filterConfigToProtobuf(c *filter.ConfigClient) (fc *FilterConfig) {
 	var rules []string
-	if c.Custom.Enabled {
-		rules = agdprotobuf.UnsafelyConvertStrSlice[filter.RuleText, string](c.Custom.Filter.Rules())
+	if c.CustomFilter.Enabled {
+		rules = agdprotobuf.UnsafelyConvertStrSlice[filter.RuleText, string](c.CustomFilter.Filter.Rules())
 	}
 
 	parentalCategories := &FilterConfig_CategoryFilter{
@@ -697,7 +746,11 @@ func filterConfigToProtobuf(c *filter.ConfigClient) (fc *FilterConfig) {
 	return &FilterConfig{
 		Custom: &FilterConfig_Custom{
 			Rules:   rules,
-			Enabled: c.Custom.Enabled,
+			Enabled: c.CustomFilter.Enabled,
+		},
+		CustomRuleList: &FilterConfig_CustomRuleList{
+			Ids:     agdprotobuf.UnsafelyConvertStrSlice[filter.ID, string](c.CustomRuleList.IDs),
+			Enabled: c.CustomRuleList.Enabled,
 		},
 		Parental: &FilterConfig_Parental{
 			PauseSchedule:  scheduleToProtobuf(c.Parental.PauseSchedule),

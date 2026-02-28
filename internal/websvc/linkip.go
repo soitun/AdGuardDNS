@@ -11,12 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AdguardTeam/AdGuardDNS/internal/agd"
 	"github.com/AdguardTeam/AdGuardDNS/internal/agdhttp"
 	"github.com/AdguardTeam/AdGuardDNS/internal/errcoll"
 	"github.com/AdguardTeam/golibs/httphdr"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil"
+	adghttputil "github.com/AdguardTeam/golibs/netutil/httputil"
+	"github.com/AdguardTeam/golibs/requestid"
 )
 
 // linkedIPHandler proxies selected requests to a remote address.
@@ -108,16 +109,19 @@ func newLinkedIPHandler(c *linkedIPHandlerConfig) (h http.Handler) {
 	// Collect errors using our own error collector.
 	handlerWithError := func(_ http.ResponseWriter, r *http.Request, err error) {
 		ctx := r.Context()
-		reqID, _ := agd.RequestIDFromContext(ctx)
 
-		l := slogutil.MustLoggerFromContext(ctx).With("req_id", reqID)
+		l := slogutil.MustLoggerFromContext(ctx)
 		errcoll.Collect(ctx, c.errColl, l, "proxying", err)
 	}
+
+	reqIDTransport := adghttputil.NewRequestIDRoundTripper(&adghttputil.RequestIDRoundTripperConfig{
+		Transport: transport,
+	})
 
 	return &linkedIPHandler{
 		httpProxy: &httputil.ReverseProxy{
 			Rewrite:        rewrite,
-			Transport:      transport,
+			Transport:      reqIDTransport,
 			ErrorLog:       slog.NewLogLogger(c.proxyLogger.Handler(), slog.LevelDebug),
 			ModifyResponse: modifyResponse,
 			ErrorHandler:   handlerWithError,
@@ -190,12 +194,12 @@ func (prx *linkedIPHandler) proxyRequest(
 
 	hdr.Set(httphdr.XConnectingIP, ip)
 
-	// Set the request ID.
-	reqID := agd.NewRequestID()
-	r = r.WithContext(agd.WithRequestID(r.Context(), reqID))
-	hdr.Set(httphdr.XRequestID, reqID.String())
+	_, ok := requestid.IDFromContext(ctx)
+	if !ok {
+		r = r.WithContext(requestid.ContextWithRequestID(r.Context(), requestid.New()))
+	}
 
-	l.DebugContext(ctx, "starting to proxy", "req_id", reqID)
+	l.DebugContext(ctx, "starting to proxy")
 
 	prx.httpProxy.ServeHTTP(w, r)
 

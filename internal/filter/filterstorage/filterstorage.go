@@ -11,7 +11,6 @@ import (
 // TODO(a.garipov):  Consider using a separate type.
 const (
 	FilterIDBlockedServiceIndex   filter.ID = "blocked_service_index"
-	FilterIDRuleListIndex         filter.ID = "rule_list_index"
 	FilterIDCategoryDomainsIndex  filter.ID = "category_domains_index"
 	FilterIDStandardProfileAccess filter.ID = "standard_profile_access"
 )
@@ -19,16 +18,9 @@ const (
 // Filenames for filter indexes.
 const (
 	indexFileNameBlockedServices       = "services.json"
-	indexFileNameRuleLists             = "filters.json"
 	indexFileNameCategoryDomains       = "category_filters.json"
 	indexFileNameStandardProfileAccess = "standard_profile_access.json"
 )
 
-// Constants that define cache identifiers for the cache manager.
-const (
-	// cachePrefixSafeSearch is used as a cache prefix for safe-search filters.
-	cachePrefixSafeSearch = "filters/safe_search"
-
-	// cachePrefixRuleList is used a cache prefix for rule-list filters.
-	cachePrefixRuleList = "filters/rulelist"
-)
+// cachePrefixSafeSearch is used as a cache prefix for safe-search filters.
+const cachePrefixSafeSearch = "filters/safe_search"

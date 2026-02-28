@@ -7,6 +7,7 @@ The AdGuard DNS debug HTTP API is served on [`LISTEN_PORT`][env-listen_port] and
 - [`GET /health-check`](#health-check)
 - [`GET /metrics`](#metrics)
 - [`GET /debug/pprof`](#pprof)
+- [`GET /debug/api/geoip`](#api-geoip)
 - [`POST /debug/api/cache/clear`](#api-cache-clear)
 - [`POST /debug/api/refresh`](#api-refresh)
 - [`POST /debug/panic`](#panic)
@@ -29,6 +30,38 @@ Prometheus metrics HTTP API. See the [metrics page][metrics] for more details.
 The HTTP interface of Go's [PProf HTTP API][pprof api].
 
 [pprof api]: https://pkg.go.dev/net/http/pprof
+
+## <a href="#api-geoip" id="api-geoip" name="api-geoip">`GET /debug/api/geoip`</a>
+
+A debugging endpoint that returns GeoIP information for the provided IP addresses.
+
+Example request:
+
+```sh
+curl "http://${LISTEN_ADDR}:${LISTEN_PORT}/debug/api/geoip?ip=1.2.3.4&ip=2.3.4.5"
+```
+
+Response body example:
+
+```json
+{
+  "data": {
+    "1.2.3.4": {
+      "asn": 123,
+      "country": "US",
+      "continent": "NA",
+      "replacement_subnets": {
+        "ipv4": "2.2.2.0/24",
+        "ipv6": "2222::/56"
+      },
+      "top_subdivision": "US-CA"
+    },
+    "2.3.4.5": {
+      "error": "some error"
+    }
+  }
+}
+```
 
 ## <a href="#api-cache-clear" id="api-cache-clear" name="api-cache-clear">`POST /debug/api/cache/clear`</a>
 
@@ -108,6 +141,7 @@ Supported IDs:
 - `filters/hashprefix/adult_blocking`
 - `filters/hashprefix/newly_registered_domains`
 - `filters/hashprefix/safe_browsing`
+- `filters/ruleliststorage`
 - `filters/storage`
 - `geoip`
 - `profiledb_full`

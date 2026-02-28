@@ -55,7 +55,8 @@ func TestDefault_Refresh(t *testing.T) {
 		http.StatusOK,
 	)
 
-	c := newDisabledConfig(t, newIndexConfig(ruleListIdxURL), newIndexConfig(catIdxURL))
+	rlStorage := newRuleListStorage(t, newRuleListIndexConfig(ruleListIdxURL))
+	c := newDisabledConfig(t, rlStorage, newIndexConfig(catIdxURL))
 	c.BlockedServices = newConfigBlockedServices(svcIdxURL)
 	c.SafeSearchGeneral = newConfigSafeSearch(safeSearchGenURL, filter.IDGeneralSafeSearch)
 	c.SafeSearchYouTube = newConfigSafeSearch(safeSearchYTURL, filter.IDYoutubeSafeSearch)
@@ -75,8 +76,6 @@ func TestDefault_Refresh(t *testing.T) {
 	testutil.RequireReceive(t, ssYTCh, filtertest.Timeout)
 	testutil.RequireReceive(t, svcIdxCh, filtertest.Timeout)
 
-	assert.True(t, s.HasListID(filtertest.RuleListID1))
-
 	ctx = testutil.ContextWithTimeout(t, filtertest.Timeout)
 	err = s.Refresh(ctx)
 	require.NoError(t, err)
@@ -89,8 +88,6 @@ func TestDefault_Refresh(t *testing.T) {
 	require.Empty(t, ssGenCh)
 	require.Empty(t, ssYTCh)
 	require.Empty(t, svcIdxCh)
-
-	assert.True(t, s.HasListID(filtertest.RuleListID1))
 }
 
 func TestDefault_Refresh_usePrevious(t *testing.T) {
@@ -112,10 +109,11 @@ func TestDefault_Refresh_usePrevious(t *testing.T) {
 	_, catIdxURL := filtertest.PrepareRefreshable(t, nil, string(catIdxData), http.StatusOK)
 
 	// Use a smaller staleness value to make sure that the filter is refreshed.
-	ruleListsConf := newIndexConfig(rlIdxURL)
+	ruleListsConf := newRuleListIndexConfig(rlIdxURL)
 	ruleListsConf.Staleness = 1 * time.Microsecond
 
-	c := newDisabledConfig(t, ruleListsConf, newIndexConfig(catIdxURL))
+	rlStorage := newRuleListStorage(t, ruleListsConf)
+	c := newDisabledConfig(t, rlStorage, newIndexConfig(catIdxURL))
 	c.ErrColl = &agdtest.ErrorCollector{
 		OnCollect: func(_ context.Context, err error) {
 			errStatus := &agdhttp.StatusError{}
@@ -133,10 +131,10 @@ func TestDefault_Refresh_usePrevious(t *testing.T) {
 	ctx := testutil.ContextWithTimeout(t, filtertest.Timeout)
 	err = s.RefreshInitial(ctx)
 	require.NoError(t, err)
-	require.True(t, s.HasListID(filtertest.RuleListID1))
 
 	fltConf := &filter.ConfigClient{
-		Custom: &filter.ConfigCustom{},
+		CustomFilter:   &filter.ConfigCustomFilter{},
+		CustomRuleList: &filter.ConfigCustomRuleList{},
 		Parental: &filter.ConfigParental{
 			Categories: &filter.ConfigCategories{},
 		},
@@ -160,7 +158,6 @@ func TestDefault_Refresh_usePrevious(t *testing.T) {
 	// must still be used.
 	err = s.Refresh(ctx)
 	require.NoError(t, err)
-	require.True(t, s.HasListID(filtertest.RuleListID1))
 
 	f = s.ForConfig(ctx, fltConf)
 	require.NotNil(t, f)

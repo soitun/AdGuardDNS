@@ -11,7 +11,7 @@ import (
 // would increment different kinds of metrics (for instance, prometheus
 // metrics).
 //
-// Every function accepts context.Context as a parameter. This context must have
+// If the function accepts a context.Context parameter, this context must have
 // server information attached to it.  It can be retrieved using functions
 // [ServerInfoFromContext] or [MustServerInfoFromContext].
 //
@@ -51,6 +51,10 @@ type MetricsListener interface {
 	// allows to keep an eye on how the addresses cache performs.
 	// TODO(ameshkov): find a way to attach this info to ctx and remove this.
 	OnQUICAddressValidation(hit bool)
+
+	// AdjustActiveRequests increases the number of requests currently being
+	// handled by the num value.
+	AdjustActiveRequests(ctx context.Context, num int)
 }
 
 // QueryInfo contains the request with its size, and the response with its size.
@@ -93,3 +97,7 @@ func (e EmptyMetricsListener) OnPanic(_ context.Context, _ any) {}
 // OnQUICAddressValidation implements the [MetricsListener] interface for
 // EmptyMetricsListener.
 func (e EmptyMetricsListener) OnQUICAddressValidation(_ bool) {}
+
+// AdjustActiveRequests implements the [MetricsListener] interface for
+// EmptyMetricsListener.
+func (e EmptyMetricsListener) AdjustActiveRequests(_ context.Context, _ int) {}

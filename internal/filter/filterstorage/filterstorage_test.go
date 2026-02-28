@@ -12,12 +12,17 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/filterstorage"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/domain"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/filtertest"
-	"github.com/AdguardTeam/golibs/logutil/slogutil"
+	"github.com/AdguardTeam/AdGuardDNS/internal/filter/ruleliststorage"
 	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/AdguardTeam/golibs/timeutil"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/require"
 )
+
+// initialTimeout is the maximum time to wait for a filter storage
+// initialization.  A separate timeout is used to make the tests using this
+// helper pass on older, slower machines.
+const initialTimeout = 2 * filtertest.Timeout
 
 // unit is a convenient alias for struct{}.
 type unit = struct{}
@@ -118,7 +123,8 @@ func newDefault(tb testing.TB) (s *filterstorage.Default) {
 		http.StatusOK,
 	)
 
-	c := newDisabledConfig(tb, newIndexConfig(ruleListIdxURL), newIndexConfig(catIdxURL))
+	rlStorage := newRuleListStorage(tb, newRuleListIndexConfig(ruleListIdxURL))
+	c := newDisabledConfig(tb, rlStorage, newIndexConfig(catIdxURL))
 	c.BlockedServices = newConfigBlockedServices(svcIdxURL)
 	c.HashPrefix = &filterstorage.HashPrefixConfig{
 		Adult:           filtertest.NewHashprefixFilter(tb, filter.IDAdultBlocking),
@@ -130,11 +136,6 @@ func newDefault(tb testing.TB) (s *filterstorage.Default) {
 
 	s, err := filterstorage.New(c)
 	require.NoError(tb, err)
-
-	// initialTimeout is the maximum time to wait for a filter storage
-	// initialization.  A separate timeout is used to make the tests using this
-	// helper pass on older, slower machines.
-	const initialTimeout = 2 * filtertest.Timeout
 
 	ctx := testutil.ContextWithTimeout(tb, initialTimeout)
 	err = s.RefreshInitial(ctx)
@@ -159,14 +160,17 @@ const defaultSubDomainNum = 4
 // entities.
 func newDisabledConfig(
 	tb testing.TB,
-	rlConf *filterstorage.IndexConfig,
+	rlStorage ruleliststorage.Storage,
 	catConf *filterstorage.IndexConfig,
 ) (c *filterstorage.Config) {
 	tb.Helper()
 
+	cacheDir := tb.TempDir()
+	filtertest.CreateFilterCacheDirs(tb, cacheDir)
+
 	return &filterstorage.Config{
-		BaseLogger: slogutil.NewDiscardLogger(),
-		Logger:     slogutil.NewDiscardLogger(),
+		BaseLogger: testLogger,
+		Logger:     testLogger,
 		BlockedServices: &filterstorage.BlockedServicesConfig{
 			Enabled: false,
 		},
@@ -174,8 +178,7 @@ func newDisabledConfig(
 		Custom: &filterstorage.CustomConfig{
 			CacheCount: filtertest.CacheCount,
 		},
-		HashPrefix:     &filterstorage.HashPrefixConfig{},
-		RuleListsIndex: rlConf,
+		HashPrefix: &filterstorage.HashPrefixConfig{},
 		SafeSearchGeneral: &filterstorage.SafeSearchConfig{
 			ID:      filter.IDGeneralSafeSearch,
 			Enabled: false,
@@ -189,9 +192,39 @@ func newDisabledConfig(
 		DomainMetrics:            domain.EmptyMetrics{},
 		ErrColl:                  agdtest.NewErrorCollector(),
 		Metrics:                  filter.EmptyMetrics{},
-		CacheDir:                 tb.TempDir(),
+		RuleListStorage:          rlStorage,
+		CacheDir:                 cacheDir,
 		DomainFilterSubDomainNum: defaultSubDomainNum,
 	}
+}
+
+// newRuleListStorage returns a new [*ruleliststorage.Default] with the given
+// index configuration.
+func newRuleListStorage(
+	tb testing.TB,
+	idxConf *ruleliststorage.IndexConfig,
+) (s *ruleliststorage.Default) {
+	tb.Helper()
+
+	cacheDir := tb.TempDir()
+	filtertest.CreateFilterCacheDirs(tb, cacheDir)
+
+	s, err := ruleliststorage.New(&ruleliststorage.Config{
+		BaseLogger:   testLogger,
+		CacheManager: agdcache.EmptyManager{},
+		Clock:        timeutil.SystemClock{},
+		ErrColl:      agdtest.NewErrorCollector(),
+		IndexConfig:  idxConf,
+		Logger:       testLogger,
+		Metrics:      filter.EmptyMetrics{},
+		CacheDir:     cacheDir,
+	})
+	require.NoError(tb, err)
+
+	err = s.RefreshInitial(testutil.ContextWithTimeout(tb, initialTimeout))
+	require.NoError(tb, err)
+
+	return s
 }
 
 // newConfigBlockedServices is a test helper that returns a new enabled
@@ -224,6 +257,23 @@ func newIndexConfig(indexURL *url.URL) (c *filterstorage.IndexConfig) {
 		ResultCacheCount:    filtertest.CacheCount,
 		ResultCacheEnabled:  true,
 		Enabled:             true,
+	}
+}
+
+// newRuleListIndexConfig is a test helper that returns a new
+// [*ruleliststorage.IndexConfig] with the given index URL.  The rest of the
+// fields are set to the corresponding [filtertest] values.
+func newRuleListIndexConfig(indexURL *url.URL) (c *ruleliststorage.IndexConfig) {
+	return &ruleliststorage.IndexConfig{
+		IndexURL:            indexURL,
+		IndexMaxSize:        filtertest.FilterMaxSize,
+		MaxSize:             filtertest.FilterMaxSize,
+		IndexRefreshTimeout: filtertest.Timeout,
+		IndexStaleness:      filtertest.Staleness,
+		RefreshTimeout:      filtertest.Timeout,
+		Staleness:           filtertest.Staleness,
+		ResultCacheCount:    filtertest.CacheCount,
+		ResultCacheEnabled:  true,
 	}
 }
 

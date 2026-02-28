@@ -1,6 +1,12 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+	"path"
+
+	"github.com/AdguardTeam/AdGuardDNS/internal/agd"
+	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/timeutil"
 	"github.com/AdguardTeam/golibs/validate"
@@ -31,8 +37,10 @@ type filtersConfig struct {
 	// domains.
 	ResponseTTL timeutil.Duration `yaml:"response_ttl"`
 
-	// RefreshIvl defines how often AdGuard DNS refreshes the rule-based filters
-	// from filter index.
+	// RefreshIvl defines how often AdGuard DNS refreshes safe search, blocked
+	// services, and category filters.  Note that filter rule-list index and
+	// each filter rule-list update operations have their own intervals, see
+	// [environment.FilterRefreshIvl].
 	RefreshIvl timeutil.Duration `yaml:"refresh_interval"`
 
 	// RefreshTimeout is the timeout for the entire filter update operation.
@@ -112,4 +120,23 @@ func (c *fltRuleListCache) Validate() (err error) {
 	}
 
 	return validate.Positive("size", c.Size)
+}
+
+// сreateFilterCacheDirs creates all the necessary subdirectories within the
+// filter cache directory.
+func сreateFilterCacheDirs(cachePath string) (err error) {
+	for _, dir := range []string{
+		filter.SubDirNameCategory,
+		filter.SubDirNameHashPrefix,
+		filter.SubDirNameIndex,
+		filter.SubDirNameRuleList,
+		filter.SubDirNameSafeSearch,
+	} {
+		err = os.MkdirAll(path.Join(cachePath, dir), agd.DefaultDirPerm)
+		if err != nil {
+			return fmt.Errorf("creating dir %s: %v", dir, err)
+		}
+	}
+
+	return nil
 }

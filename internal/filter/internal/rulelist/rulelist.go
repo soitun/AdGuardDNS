@@ -126,6 +126,6 @@ func (f *baseFilter) ID() (id filter.ID, svcID filter.BlockedServiceID) {
 }
 
 // RulesCount returns the number of rules in the filter's engine.
-func (f *baseFilter) RulesCount() (n int) {
-	return f.engine.RulesCount
+func (f *baseFilter) RulesCount() (n uint64) {
+	return f.engine.RulesCount()
 }

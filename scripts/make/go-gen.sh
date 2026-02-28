@@ -21,44 +21,55 @@ set -e -f -u
 go="${GO:-go}"
 readonly go
 
+protoc_gen_go_grpc_path="$("$go" tool -n protoc-gen-go-grpc)"
+protoc_gen_go_path="$("$go" tool -n protoc-gen-go)"
+readonly protoc_gen_go_grpc_path protoc_gen_go_path
+
 backendpb() (
 	cd ./internal/backendpb/
 	protoc \
-		--go-grpc_opt=Mdns.proto=./backendpb \
-		--go-grpc_opt=paths=source_relative \
-		--go-grpc_out=. \
+		--go-grpc_opt='Mdns.proto=./backendpb' \
+		--go-grpc_opt='paths=source_relative' \
+		--go-grpc_out='.' \
 		--go_opt=Mdns.proto=./backendpb \
-		--go_opt=paths=source_relative \
-		--go_out=. \
-		./dns.proto
+		--go_opt=paths='source_relative' \
+		--go_out='.' \
+		--plugin="protoc-gen-go-grpc=${protoc_gen_go_grpc_path}" \
+		--plugin="protoc-gen-go=${protoc_gen_go_path}" \
+		./dns.proto \
+		;
 )
 
 ecscache() (
 	cd ./internal/ecscache/
 	"$go" run ./ecsblocklist_generate.go
-	# Force format code, because it's not possible to make an accurate
-	# template for a long list of strings with different lengths.
-	gofumpt -l -w ./ecsblocklist.go
+	# Force format code, because it's not possible to make an accurate template
+	# for a long list of strings with different lengths.
+	"$go" tool gofumpt -l -w ./ecsblocklist.go
 )
 
 fcpb() (
 	cd ./internal/profiledb/internal/fcpb/
 	protoc \
-		--go_opt=paths=source_relative \
-		--go_out=./ \
-		--go_opt=default_api_level=API_OPAQUE \
-		--go_opt=Mfc.proto=github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/fcpb \
-		./fc.proto
+		--go_opt='Mfc.proto=github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/fcpb' \
+		--go_opt='default_api_level=API_OPAQUE' \
+		--go_opt='paths=source_relative' \
+		--go_out='.' \
+		--plugin="protoc-gen-go=${protoc_gen_go_path}" \
+		./fc.proto \
+		;
 )
 
 filecachepb() (
 	cd ./internal/profiledb/internal/filecachepb/
 
 	protoc \
-		--go_opt=paths=source_relative \
-		--go_out=. \
-		--go_opt=Mfilecache.proto=github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/filecachepb \
-		./filecache.proto
+		--go_opt='Mfilecache.proto=github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/filecachepb' \
+		--go_opt='paths=source_relative' \
+		--go_out='.' \
+		--plugin="protoc-gen-go=${protoc_gen_go_path}" \
+		./filecache.proto \
+		;
 )
 
 geoip_asntops() (

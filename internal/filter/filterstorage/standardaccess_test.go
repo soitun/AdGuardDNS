@@ -9,6 +9,7 @@ import (
 
 	"github.com/AdguardTeam/AdGuardDNS/internal/access"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter/filterstorage"
+	"github.com/AdguardTeam/AdGuardDNS/internal/filter/internal/filtertest"
 	"github.com/AdguardTeam/AdGuardDNS/internal/geoip"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/testutil"
@@ -125,13 +126,16 @@ func TestStandardAccess(t *testing.T) {
 			OnSetConfig: emptySetter.OnSetConfig,
 		}
 
+		cacheDir := t.TempDir()
+		filtertest.CreateFilterCacheDirs(t, cacheDir)
+
 		newCtx := testutil.ContextWithTimeout(t, testTimeout)
 		sa, newErr := filterstorage.NewStandardAccess(newCtx, &filterstorage.StandardAccessConfig{
 			Logger:     testLogger,
 			BaseLogger: testLogger,
 			Getter:     tc.storage,
 			Setter:     setter,
-			CacheDir:   t.TempDir(),
+			CacheDir:   cacheDir,
 		})
 		require.NoError(t, newErr)
 

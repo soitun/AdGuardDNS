@@ -154,7 +154,7 @@ func TestMiddleware_Wrap_specialDomain(t *testing.T) {
 			err := h.ServeDNS(ctx, rw, req)
 			require.NoError(t, err)
 
-			resp := rw.Msg()
+			resp := rw.Resp()
 			require.NotNil(t, resp)
 
 			assert.Equal(t, tc.wantRCode, dnsmsg.RCode(resp.Rcode))

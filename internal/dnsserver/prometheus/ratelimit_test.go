@@ -67,9 +67,9 @@ func TestRateLimiterMetricsListener_integration_cache(t *testing.T) {
 		err = handlerWithMiddleware.ServeDNS(ctx, nrw, req)
 		require.NoError(t, err)
 		if i < count {
-			dnsservertest.RequireResponse(t, req, nrw.Msg(), 1, dns.RcodeSuccess, false)
+			dnsservertest.RequireResponse(t, req, nrw.Resp(), 1, dns.RcodeSuccess, false)
 		} else {
-			require.Nil(t, nrw.Msg())
+			require.Nil(t, nrw.Resp())
 		}
 	}
 

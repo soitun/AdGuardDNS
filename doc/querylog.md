@@ -3,8 +3,8 @@
 The query log is written in the [JSONL][jsonl] (JSON Lines) format. The log entries are designed to be concise and easily compressable. An example of the log output:
 
 ```jsonl
-{"u":"ABCD","b":"prof1234","i":"dev1234","c":"RU","d":"US","n":"example.com.","l":"cdef5678","m":"||example.com^","t":1628590394000,"a":1234,"e":5,"q":1,"rn":1234,"f":2,"s":0,"p":8,"r":0}
-{"u":"DEFG","b":"prof1234","i":"dev1234","c":"RU","d":"JP","n":"example.org.","l":"hijk9012","m":"||example.org^","t":1628590394100,"a":6789,"e":6,"q":1,"rn":56789,"f":2,"s":0,"p":8,"r":0}
+{"b":"prof1234","i":"dev1234","c":"RU","d":"US","n":"example.com.","l":"cdef5678","m":"||example.com^","t":1628590394000,"a":1234,"e":5,"ac":1234,"q":1,"rn":1234,"f":2,"s":0,"st":1,"p":8,"r":0}
+{"b":"prof1234","i":"dev1234","c":"RU","d":"JP","n":"example.org.","l":"hijk9012","m":"||example.org^","t":1628590394100,"a":6789,"e":6,"ac":1234,"q":1,"rn":56789,"f":2,"s":0,"st":0,"p":8,"r":0}
 ```
 
 AdGuard DNS opens and closes the log file on each write to prevent issues with external log rotation.
@@ -15,12 +15,9 @@ AdGuard DNS opens and closes the log file on each write to prevent issues with e
 
 Property names have been chosen to be single-letter but still have mnemonic rules to remember, which property means what. The properties are:
 
-- <a href="#properties-u" id="properties-u" name="properties-u">`u`</a>: The unique ID of the request. The short name `u` stands for “unique”.
+- <a href="#properties-ac" id="properties-ac" name="properties-ac">`ac`</a>: The detected account ID, if any. The short name `ac` stands for “account”.
 
-    > [!NOTE]
-    > This field is deprecated and may be removed in the future.
-
-    **Example:** `"ABCD1234"`
+    **Example:** `1234`
 
 - <a href="#properties-b" id="properties-b" name="properties-b">`b`</a>: The detected profile ID (also known as DNS ID and DNS Server ID), if any. The short name `b` stands for “buyer”.
 
@@ -133,6 +130,10 @@ Property names have been chosen to be single-letter but still have mnemonic rule
 - <a href="#properties-s" id="properties-s" name="properties-s">`s`</a>: The status of whether the response was validated with DNSSEC. `0` means no, `1` means yes. The short name `s` stands for “secure”.
 
     **Example:** `1`
+
+- <a href="#properties-st" id="properties-st" name="properties-st">`st`</a>: Indicates if the log must be streamed. `0` means no, `1` means yes. The short name `st` stands for stream”.
+
+**Example:** `1`
 
 - <a href="#properties-p" id="properties-p" name="properties-p">`p`</a>: The DNS protocol used to process this request. The short name `p` stands for “protocol”. The possible values are:
 

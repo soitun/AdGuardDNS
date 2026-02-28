@@ -4,12 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/AdguardTeam/AdGuardDNS/internal/agd"
 	"github.com/AdguardTeam/golibs/contextutil"
 )
 
 // contextConstructor is a [contextutil.Constructor] implementation that returns
-// a context with the given timeout as well as a new [agd.RequestID].
+// a context with the given timeout.
 type contextConstructor struct {
 	timeout time.Duration
 }
@@ -25,13 +24,10 @@ func newContextConstructor(timeout time.Duration) (c *contextConstructor) {
 var _ contextutil.Constructor = (*contextConstructor)(nil)
 
 // New implements the [contextutil.Constructor] interface for
-// *contextConstructor.  It returns a context with a new [agd.RequestID] as well
-// as its timeout and the corresponding cancellation function.
+// *contextConstructor.  It returns a context with timeout and the corresponding
+// cancellation function.
 func (c *contextConstructor) New(
 	parent context.Context,
 ) (ctx context.Context, cancel context.CancelFunc) {
-	ctx, cancel = context.WithTimeout(parent, c.timeout)
-	ctx = agd.WithRequestID(ctx, agd.NewRequestID())
-
-	return ctx, cancel
+	return context.WithTimeout(parent, c.timeout)
 }

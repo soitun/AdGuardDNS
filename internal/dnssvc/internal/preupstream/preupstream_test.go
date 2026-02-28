@@ -99,7 +99,7 @@ func TestPreUpstreamMwHandler_ServeDNS_androidMetric(t *testing.T) {
 			err := h.ServeDNS(ctx, rw, tc.req)
 			require.NoError(t, err)
 
-			msg := rw.Msg()
+			msg := rw.Resp()
 			require.NotNil(t, msg)
 
 			assert.Equal(t, tc.wantAns, msg.Answer)

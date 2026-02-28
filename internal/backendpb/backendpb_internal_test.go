@@ -15,13 +15,12 @@ import (
 // TODO(a.garipov):  Move the generated code into a separate subpackage and move
 // all or most of these into external tests of that package.
 const (
-	TestAccountIDStr    = "acc1234"
 	TestDeviceIDStr     = "dev1234"
 	TestHumanIDStr      = "My-Device-X--10"
 	TestHumanIDLowerStr = "my-device-x--10"
 	TestProfileIDStr    = "prof1234"
 
-	TestAccountID    agd.AccountID    = TestAccountIDStr
+	TestAccountID    agd.AccountID    = 1234
 	TestDeviceID     agd.DeviceID     = TestDeviceIDStr
 	TestHumanID      agd.HumanID      = TestHumanIDStr
 	TestHumanIDLower agd.HumanIDLower = TestHumanIDLowerStr

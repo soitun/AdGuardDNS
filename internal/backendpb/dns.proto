@@ -6,38 +6,46 @@ import "google/protobuf/timestamp.proto";
 
 // TODO(a.garipov):  Expand the documentation and make it consistent.
 
+/**
+ * Service DNSService defines methods for handing servers and devices bound to
+ * users' accounts.
+ */
 service DNSService {
-  /*
-     Gets DNS profiles.
-
-     Field "sync_time" in DNSProfilesRequest - pass to return the latest updates after this time moment.
-
-     The trailers headers will include a "sync_time", given in milliseconds,
-     that should be used for subsequent incremental DNS profile synchronization requests.
-
-     This method may return the following errors:
-     - RateLimitedError: If too many "full sync" concurrent requests are made.
-     - AuthenticationFailedError: If the authentication failed.
-  */
+  /**
+   * Method getDNSProfiles returns DNS profiles based on the data in the
+   * request.
+   *
+   * The trailers SHOULD include a "sync_time", given in milliseconds, that
+   * SHOULD be used for subsequent incremental DNS profile synchronization
+   * requests.
+   *
+   * This method MAY return the following errors:
+   * - RateLimitedError: If too many "full sync" concurrent requests are made.
+   * - AuthenticationFailedError: If the authentication failed.
+   */
   rpc getDNSProfiles(DNSProfilesRequest) returns (stream DNSProfile);
 
-  /*
-     Stores devices activity.
-
-     This method may return the following errors:
-     - AuthenticationFailedError: If the authentication failed.
-  */
+  /**
+   * Method saveDevicesBillingStat stores devices activity for billing.
+   *
+   * This method MAY return the following errors:
+   * - AuthenticationFailedError: If the authentication failed.
+   */
   rpc saveDevicesBillingStat(stream DeviceBillingStat) returns (google.protobuf.Empty);
 
-  /*
-     Create device by "human_id".
-
-     This method may return the following errors:
-     - RateLimitedError: If the request was made too frequently and the client must wait before retrying.
-     - DeviceQuotaExceededError: If the client has exceeded its quota for creating devices.
-     - BadRequestError: If the request is invalid: DNS server does not exist, creation of auto-devices is disabled or human_id validation failed.
-     - AuthenticationFailedError: If the authentication failed.
-  */
+  /**
+   * Method createDeviceByHumanId creates a device by a profile ID, a human ID,
+   * and a device type.
+   *
+   * This method MAY return the following errors:
+   * - RateLimitedError: If the request was made too frequently and the client
+   *   must wait before retrying.
+   * - DeviceQuotaExceededError: If the client has exceeded its quota for
+   *   creating devices.
+   * - BadRequestError: If the request is invalid: DNS server does not exist,
+   *   creation of auto-devices is disabled or human ID validation failed.
+   * - AuthenticationFailedError: If the authentication failed.
+   */
   rpc createDeviceByHumanId(CreateDeviceRequest) returns (CreateDeviceResponse);
 }
 
@@ -107,7 +115,15 @@ message GlobalAccessSettingsResponse {
   AccessSettings standard = 1;
 }
 
+/**
+ * Message DNSProfilesRequest contains the data that a DNSService uses to
+ * return DNSProfile instances.
+ */
 message DNSProfilesRequest {
+  /**
+   * Field sync_time is the start of the interval of required updates. If
+   * sync_time is empty, the DNSService returns all data.
+   */
   google.protobuf.Timestamp sync_time = 1;
 }
 
@@ -123,7 +139,12 @@ message DNSProfilesRequest {
 message DNSProfile {
   // Message fields
 
+  /**
+   * Field safe_browsing contains settings for the safe-browsing filters.  If
+   * absent, safe-browsing filters are disabled.
+   */
   SafeBrowsingSettings safe_browsing = 5;
+
   ParentalSettings parental = 6;
 
   /**
@@ -131,6 +152,12 @@ message DNSProfile {
    * the rule-list filtering is disabled.
    */
   RuleListsSettings rule_lists = 7;
+
+  /**
+   * Field custom_rule_lists contains settings for the custom rule-list
+   * filters.  If absent, the custom rule-list feature is disabled.
+   */
+  CustomRuleListsSettings custom_rule_lists = 35;
 
   google.protobuf.Duration filtered_response_ttl = 10;
   AccessSettings access = 18;
@@ -188,10 +215,14 @@ message DNSProfile {
   string dns_id = 1;
 
   /**
-   * Field account_id is the ID of the account to which this DNS server
-   * belongs.  If field deleted is false, account_id MUST be present.
+   * Field account_id is a legacy field that should be replaced by
+   * account_id_int.  The field's value MUST contain a valid positive integer
+   * and MUST be the same as the one in account_id_int.  If field deleted is
+   * false, at least one of account_id and account_id_int MUST be set.
+   *
+   * TODO(a.garipov):  Remove.
    */
-  string account_id = 23;
+  string account_id = 23 [deprecated = true];
 
   // Repeated fields
 
@@ -214,14 +245,31 @@ message DNSProfile {
   /**
    * Field custom_rules contains custom filtering rules for this DNS server, if
    * any.  All items MUST contain only valid UTF-8 characters and have the size
-   * less than or equal to UTF-8 1024 characters (not bytes).
+   * less than or equal to UTF-8 10 000 characters (not bytes).
    */
   repeated string custom_rules = 9;
 
+  // Integer fields
+
+  /**
+   * Field account_id_int is the ID of the account to which this DNS server
+   * belongs.  It should be used instead of account_id.  The field's value MUST
+   * be positive and MUST be the same as in account_id.  If field deleted is
+   * false, at least one of account_id and account_id_int MUST be set.
+   *
+   * TODO(a.garipov):  Rename after removing the current account_id.
+   */
+  int32 account_id_int = 36;
+
   // Boolean fields
 
-  bool filtering_enabled = 2;
-  bool query_log_enabled = 3;
+  bool auto_devices_enabled = 19;
+
+  bool block_chrome_prefetch = 21;
+
+  bool block_firefox_canary = 12;
+
+  bool block_private_relay = 11;
 
   /**
    * Field deleted, if true, means that this DNS server has been deleted.  All
@@ -229,11 +277,33 @@ message DNSProfile {
    */
   bool deleted = 4;
 
-  bool block_private_relay = 11;
-  bool block_firefox_canary = 12;
+  /**
+   * Field filtering_enabled defines whether queries from devices of this
+   * profile are filtered in any way at all.
+   *
+   * NOTE:  Field DeviceSettings.filtering_enabled MUST also be true to enable
+   * filtering for a particular device.
+   */
+  bool filtering_enabled = 2;
+
+  /**
+   * Field ip_log_enabled defines whether client IP addresses are logged in the
+   * query log.
+   */
   bool ip_log_enabled = 17;
-  bool auto_devices_enabled = 19;
-  bool block_chrome_prefetch = 21;
+
+  /**
+   * Field query_log_enabled defines whether query logs are saved for the
+   * devices of this profile.
+   */
+  bool query_log_enabled = 3;
+
+  /**
+   * Field query_log_stream defines whether query logs are streamed for the
+   * devices of this profile.
+   */
+  bool query_log_stream = 37;
+
   bool standard_access_settings_enabled = 25;
 }
 
@@ -282,21 +352,82 @@ message CustomDomain {
   }
 }
 
+/**
+ * Message SafeBrowsingSettings contains settings for the safe-browsing
+ * filters.
+ *
+ * The fields are ordered in a way that optimizes the generated structures'
+ * layouts.
+ */
 message SafeBrowsingSettings {
-  bool enabled = 1;
+  /**
+   * Field typosquatting contains settings for the typosquatting filter.  If
+   * absent, the typosquatting filter is disabled.
+   */
+  TyposquattingFilterSettings typosquatting = 4;
+
+  /**
+   * Field block_dangerous_domains, if true, enables the dangerous-domains filter.
+   *
+   * NOTE:  Fields DNSProfile.filtering_enabled,
+   * DeviceSettings.filtering_enabled, and SafeBrowsingSettings.enabled MUST
+   * also be true to enable the dangerous-domain filter.
+   */
   bool block_dangerous_domains = 2;
+
+  /**
+   * Field block_nrd, if true, enabled the newly-registered domains filter.
+   *
+   * NOTE:  Fields DNSProfile.filtering_enabled,
+   * DeviceSettings.filtering_enabled, and SafeBrowsingSettings.enabled MUST
+   * also be true to enable the newly-registered domain filter.
+   */
   bool block_nrd = 3;
+
+  /**
+   * Field enabled, if true, enables safe-browsing filters.
+   *
+   * NOTE:  Fields DNSProfile.filtering_enabled and
+   * DeviceSettings.filtering_enabled MUST also be true to enable safe-browsing
+   * filters.
+   */
+  bool enabled = 1;
 }
 
+/**
+ * Message DeviceSettings contains the data of a device.
+ *
+ * The fields are ordered in a way that optimizes the generated structures'
+ * layouts.
+ *
+ * TODO(a.garipov):  Expand the field documentation.
+ */
 message DeviceSettings {
-  string id = 1;
-  string name = 2;
-  bool filtering_enabled = 3;
-  bytes linked_ip = 4;
-  repeated bytes dedicated_ips = 5;
   AuthenticationSettings authentication = 6;
-  // Value in lower case. Will be empty for "ordinary" devices and non-empty for "automatically" created devices.
+
+  string id = 1;
+
+  string name = 2;
+
+  /**
+   * Field human_id_lower contains the lowercased value of the Human ID used to
+   * create the device, if any.  The field's value is empty for ordinary
+   * devices and non-empty for automatically created devices.
+   */
   string human_id_lower = 7;
+
+  bytes linked_ip = 4;
+
+  repeated bytes dedicated_ips = 5;
+
+  /**
+   * Field filtering_enabled defines whether queries from this device are
+   * filtered in any way at all.
+   *
+   * NOTE:  Field DNSProfile.filtering_enabled MUST also be true to enable
+   * filtering for a particular device.
+   */
+  bool filtering_enabled = 3;
 }
 
 message ParentalSettings {
@@ -349,6 +480,30 @@ message RuleListsSettings {
 }
 
 /**
+ * Message CustomRuleListsSettings contains settings for the custom rule-list
+ * filters.
+ *
+ * The fields are ordered in a way that optimizes the generated structures'
+ * layouts.
+ */
+message CustomRuleListsSettings {
+  /**
+   * Field ids contains unique identifiers of the rule-list filters being used.
+   * IDs MUST be unique, between 1 and 128 bytes long, and only contain ASCII
+   * symbols with no slashes.
+   *
+   * It is recommended that these IDs are distinct from RuleListsSettings.ids.
+   * For example, use a standardized prefix like "custom_".
+   */
+  repeated string ids = 2;
+
+  /**
+   * Field enabled, if true, enables the custom rule-list filter feature.
+   */
+  bool enabled = 1;
+}
+
+/**
  * Message BlockingModeCustomIP contains custom IP addresses typically leading
  * to a blocking page.
  */
@@ -378,7 +533,9 @@ message DeviceBillingStat {
   google.protobuf.Timestamp last_activity_time = 1;
   string device_id = 2;
   string client_country = 3;
-  // Protocol type. Possible values see here: https://bit.adguard.com/projects/DNS/repos/dns-server/browse#ql-properties
+  // Field proto is the protocol type.
+  //
+  // See https://github.com/AdguardTeam/AdGuardDNS/blob/master/doc/querylog.md#properties-p.
   uint32 proto = 4;
   uint32 asn = 5;
   uint32 queries = 6;
@@ -512,4 +669,112 @@ message CategoryFilterSettings {
    * Field enabled, if true, enables the category filter feature.
    */
   bool enabled = 1;
+}
+
+/**
+ * Service FilterIndexService defines methods for requesting indexes of filters
+ * and their global settings.
+ *
+ * TODO(a.garipov):  Add RuleListFilterIndex.
+ */
+service FilterIndexService {
+  /**
+   * Method getTyposquattingFilterIndex returns the global-domain filter
+   * index and settings.
+   *
+   * TODO(a.tropnikov):  Document errors.
+   */
+  rpc getTyposquattingFilterIndex(TyposquattingFilterIndexRequest) returns (TyposquattingFilterIndexResponse);
+}
+
+/**
+ * Message TyposquattingFilterIndexRequest contains the data to use to obtain
+ * the typosquatting filter index.
+ *
+ * TODO(a.garipov):  Add fields if necessary.
+ */
+message TyposquattingFilterIndexRequest {}
+
+/**
+ * Message TyposquattingFilterIndexResponse contains the data about the
+ * typosquatting filter index.
+ */
+message TyposquattingFilterIndexResponse {
+  /**
+   * Field index contains the current index of protected domains and other
+   * settings for the typosquatting filter.
+   */
+  TyposquattingFilterIndex index = 1;
+}
+
+/**
+ * Message TyposquattingFilterSettings contains settings for the typosquatting
+ * filter.
+ *
+ * NOTE:  Fields DNSProfile.filtering_enabled, DNSProfile.safe_browsing.enabled
+ * and DeviceSettings.filtering_enabled MUST also be true to enable the
+ * typosquatting filter for a particular device.
+ */
+message TyposquattingFilterSettings {
+  /**
+   * Field enabled, if true, enables the typosquatting filter feature.
+   */
+  bool enabled = 1;
+}
+
+/**
+ * Message TyposquattingFilterIndex contains domains that must be protected by
+ * the typosquatting filter, exceptions, etc.
+ */
+message TyposquattingFilterIndex {
+  /**
+   * Message TyposquattingFilterIndex.ProtectedDomain represents information
+   * about a single protected domain.
+   */
+  message ProtectedDomain {
+    /**
+     * Field domain is the protected domain name, for example "google.com".  It
+     * MUST NOT be empty and the value MUST be a valid domain name.  It SHOULD
+     * be an eTLD+1 domain.
+     */
+    string domain = 1;
+
+    /**
+     * Field distance defines the minimal Damerau–Levenshtein distance to use
+     * when matching against the domain.
+     *
+     * For example, if distance = 1 and domain = "google.com" then "gogle.com",
+     * "gooogle.com", and "gogole.com" will match, but "ggle.com",
+     * "goooogle.com", and "ggoole.com" won't.
+     *
+     * It MUST be positive.
+     */
+    uint32 distance = 2;
+  }
+
+  /**
+   * Message TyposquattingFilterIndex.Exception is a single exception to the
+   * typosquatting filter.  For example, if TyposquattingFilterIndex.domains
+   * contains "www.google.com", an exception might be "www.google.co".
+   */
+  message Exception {
+    /**
+     * Field domain is the domain name that isn't checked by the typosquatting
+     * filter.  It MUST NOT be empty and the value MUST be a valid domain name.
+     * It SHOULD be an eTLD+1 domain.
+     */
+    string domain = 1;
+  }
+
+  /**
+   * Field domains contains the data about domain names protected by the
+   * typosquatting filter.
+   */
+  repeated ProtectedDomain domains = 1;
+
+  /**
+   * Field exceptions contains the data about exceptions to the typosquatting
+   * filter.
+   */
+  repeated Exception exceptions = 2;
 }

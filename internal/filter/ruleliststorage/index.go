@@ -1,4 +1,4 @@
-package filterstorage
+package ruleliststorage
 
 import (
 	"cmp"
@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"time"
 
 	"github.com/AdguardTeam/AdGuardDNS/internal/agdhttp"
 	"github.com/AdguardTeam/AdGuardDNS/internal/errcoll"
 	"github.com/AdguardTeam/AdGuardDNS/internal/filter"
-	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/errors"
+	"github.com/AdguardTeam/golibs/validate"
 )
 
 // indexResp is the struct for the JSON response from a filter index API.
@@ -32,7 +33,16 @@ type indexRespFilter struct {
 
 	// Key contains the ID of the filter as a string.
 	Key string `json:"filterKey"`
+
+	// TimeUpdated contains the time when the filter was updated.  It is in the
+	// IdxTimeUpdatedFormat format.
+	TimeUpdated string `json:"timeUpdated"`
 }
+
+// IdxTimeUpdatedFormat is the format of the "timeUpdated" field in the index.
+//
+// See https://github.com/AdguardTeam/HostlistsRegistry/blame/b7f81a3feb145cf6442da859b9e9d07d96a57fad/hostlists-builder/index.js#L26.
+const IdxTimeUpdatedFormat = "2006-01-02T15:04:05-0700"
 
 // compare is the comparison function for filters in the index.  f and other may
 // be nil; nil filters are sorted after non-nil ones.
@@ -56,11 +66,10 @@ func (f *indexRespFilter) validate() (err error) {
 		return errors.ErrNoValue
 	}
 
-	var errs []error
-
-	// TODO(a.garipov):  Use urlutil.URL or add IsValidURLString to golibs.
-	if f.DownloadURL == "" {
-		errs = append(errs, fmt.Errorf("downloadUrl: %w", errors.ErrEmptyValue))
+	errs := []error{
+		// TODO(a.garipov):  Use urlutil.URL or add IsValidURLString to golibs.
+		validate.NotEmpty("downloadUrl", f.DownloadURL),
+		validate.NotEmpty("timeUpdated", f.TimeUpdated),
 	}
 
 	if _, err = filter.NewID(f.Key); err != nil {
@@ -72,19 +81,19 @@ func (f *indexRespFilter) validate() (err error) {
 
 // indexData is the data of a single item in the filtering-rule index response.
 type indexData struct {
-	url *url.URL
-	id  filter.ID
+	url     *url.URL
+	updTime time.Time
 }
 
-// toInternal converts the filters from the index to []*indexData.  All errors
-// are logged and collected.  logger and errColl must not be nil.
+// toInternal converts the filters from the index to a map of *indexData by
+// filter identifiers.  All errors are logged and collected.  logger and errColl
+// must not be nil.
 func (r *indexResp) toInternal(
 	ctx context.Context,
 	logger *slog.Logger,
 	errColl errcoll.Interface,
-) (fls []*indexData) {
-	ids := container.NewMapSet[filter.ID]()
-	fls = make([]*indexData, 0, len(r.Filters))
+) (fls map[filter.ID]*indexData) {
+	fls = make(map[filter.ID]*indexData, len(r.Filters))
 	for i, rf := range r.Filters {
 		err := rf.validate()
 		if err != nil {
@@ -94,31 +103,44 @@ func (r *indexResp) toInternal(
 			continue
 		}
 
-		u, err := agdhttp.ParseHTTPURL(rf.DownloadURL)
-		if err != nil {
-			err = fmt.Errorf("validating url: %w", err)
-			errcoll.Collect(ctx, errColl, logger, "index response", err)
-
-			continue
-		}
-
 		// Use a simple conversion, since [*indexRespFilter.validate] has
 		// already made sure that the ID is valid.
 		id := filter.ID(rf.Key)
-		if ids.Has(id) {
+		if _, ok := fls[id]; ok {
 			err = fmt.Errorf("rule-list id: %w: %q", errors.ErrDuplicated, rf.Key)
 			errcoll.Collect(ctx, errColl, logger, "index response", err)
 
 			continue
 		}
 
-		ids.Add(id)
+		fl, err := rf.toInternal()
+		if err != nil {
+			errcoll.Collect(ctx, errColl, logger, "index response", err)
 
-		fls = append(fls, &indexData{
-			url: u,
-			id:  id,
-		})
+			continue
+		}
+
+		fls[id] = fl
 	}
 
 	return fls
+}
+
+// toInternal converts the filter from the index to *indexData.  f must be
+// valid.
+func (f *indexRespFilter) toInternal() (d *indexData, err error) {
+	u, err := agdhttp.ParseHTTPURL(f.DownloadURL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing url: %w", err)
+	}
+
+	updTime, err := time.Parse(IdxTimeUpdatedFormat, f.TimeUpdated)
+	if err != nil {
+		return nil, fmt.Errorf("parsing timeUpdated: %w", err)
+	}
+
+	return &indexData{
+		url:     u,
+		updTime: updTime,
+	}, nil
 }

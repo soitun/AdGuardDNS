@@ -13,52 +13,10 @@ import (
 // ctxKey is the type for all common context keys.
 type ctxKey uint8
 
+// Context key values.
 const (
-	ctxKeyReqID ctxKey = iota
-	ctxKeyReqInfo
+	ctxKeyReqInfo ctxKey = iota
 )
-
-// type check
-var _ fmt.Stringer = ctxKey(0)
-
-// String implements the fmt.Stringer interface for ctxKey.
-func (k ctxKey) String() (s string) {
-	switch k {
-	case ctxKeyReqID:
-		return "ctxKeyReqID"
-	case ctxKeyReqInfo:
-		return "ctxKeyReqInfo"
-	default:
-		panic(fmt.Errorf("bad ctx key value %d", k))
-	}
-}
-
-// panicBadType is a helper that panics with a message about the context key and
-// the expected type.
-func panicBadType(key ctxKey, v any) {
-	panic(fmt.Errorf("bad type for %s: %T(%[2]v)", key, v))
-}
-
-// WithRequestID returns a copy of the parent context with the request ID added.
-func WithRequestID(parent context.Context, id RequestID) (ctx context.Context) {
-	return context.WithValue(parent, ctxKeyReqID, id)
-}
-
-// RequestIDFromContext returns the request ID from the context, if any.
-func RequestIDFromContext(ctx context.Context) (id RequestID, ok bool) {
-	const key = ctxKeyReqID
-	v := ctx.Value(key)
-	if v == nil {
-		return RequestID{}, false
-	}
-
-	id, ok = v.(RequestID)
-	if !ok {
-		panicBadType(key, v)
-	}
-
-	return id, true
-}
 
 // RequestInfo contains information about the current request.  A RequestInfo
 // put into the context must not be modified.
@@ -90,10 +48,6 @@ type RequestInfo struct {
 	// Host is the lowercased, non-FQDN version of the hostname from the
 	// question of the request.
 	Host string
-
-	// ID is the unique ID of the request.  It is resurfaced here to optimize
-	// context lookups.
-	ID RequestID
 
 	// QType is the type of question for this request.
 	QType dnsmsg.RRType
@@ -146,7 +100,6 @@ func ContextWithRequestInfo(parent context.Context, ri *RequestInfo) (ctx contex
 // RequestInfoFromContext returns the request information from the context, if
 // any.  ri must not be modified.
 func RequestInfoFromContext(ctx context.Context) (ri *RequestInfo, ok bool) {
-	const key = ctxKeyReqInfo
 	v := ctx.Value(ctxKeyReqInfo)
 	if v == nil {
 		return nil, false
@@ -154,7 +107,7 @@ func RequestInfoFromContext(ctx context.Context) (ri *RequestInfo, ok bool) {
 
 	ri, ok = v.(*RequestInfo)
 	if !ok {
-		panicBadType(key, v)
+		panic(fmt.Errorf("bad type for ctxKeyReqInfo: %T(%[1]v)", v))
 	}
 
 	return ri, true

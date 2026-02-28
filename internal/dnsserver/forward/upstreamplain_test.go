@@ -70,7 +70,7 @@ func TestUpstreamPlain_Exchange_truncated(t *testing.T) {
 			return err
 		}
 
-		res := nrw.Msg()
+		res := nrw.Resp()
 		network := dnsserver.NetworkFromAddr(rw.LocalAddr())
 
 		if network == dnsserver.NetworkUDP {

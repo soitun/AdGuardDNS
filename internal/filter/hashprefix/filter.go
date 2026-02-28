@@ -368,7 +368,7 @@ func (f *Filter) RefreshInitial(ctx context.Context) (err error) {
 // not try to load the list from its URL when there is already a file in the
 // cache directory, regardless of its staleness.
 func (f *Filter) refresh(ctx context.Context, acceptStale bool) (err error) {
-	var count int
+	var count uint64
 	defer func() {
 		// TODO(a.garipov):  Consider using [agdtime.Clock].
 		f.metrics.SetFilterStatus(ctx, string(f.id), time.Now(), count, err)

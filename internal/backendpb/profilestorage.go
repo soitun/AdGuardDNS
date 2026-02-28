@@ -273,11 +273,6 @@ func (s *ProfileStorage) newProfile(
 		return nil, nil, nil, fmt.Errorf("id: %w", err)
 	}
 
-	accID, err := agd.NewAccountID(p.AccountId)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("account id: %w", err)
-	}
-
 	filterConf, err := s.newFilterConfig(ctx, p, profID, s.logger, s.errColl)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("filter config: %w", err)
@@ -295,6 +290,12 @@ func (s *ProfileStorage) newProfile(
 		s.profAccessCons,
 		p.StandardAccessSettingsEnabled,
 	)
+
+	var accID agd.AccountID
+	accID, err = newAccountIDFromProtobuf(p)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("account id: %w", err)
+	}
 
 	return &agd.Profile{
 		CustomDomains:            p.CustomDomain.toInternal(ctx, s.errColl, s.logger),
@@ -316,7 +317,18 @@ func (s *ProfileStorage) newProfile(
 		FilteringEnabled:         p.FilteringEnabled,
 		IPLogEnabled:             p.IpLogEnabled,
 		QueryLogEnabled:          p.QueryLogEnabled,
+		QueryLogStream:           p.QueryLogStream,
 	}, devices, devChg, nil
+}
+
+// newAccountIDFromProtobuf extracts and validates account ID from protobuf
+// profile.  p must not be nil.
+func newAccountIDFromProtobuf(p *DNSProfile) (accID agd.AccountID, err error) {
+	if p.AccountIdInt != 0 {
+		return agd.NewAccountID(p.AccountIdInt)
+	}
+
+	return agd.NewAccountIDFromString(p.AccountId)
 }
 
 // newFilterConfig creates a new filter configuration from the protobuf profile.
@@ -344,17 +356,18 @@ func (s *ProfileStorage) newFilterConfig(
 		})
 	}
 
-	customConf := &filter.ConfigCustom{
+	customConf := &filter.ConfigCustomFilter{
 		Filter: customFilter,
 		// TODO(a.garipov):  Consider adding an explicit flag to the protocol.
 		Enabled: customEnabled,
 	}
 
 	return &filter.ConfigClient{
-		Custom:       customConf,
-		Parental:     parental,
-		RuleList:     p.RuleLists.toInternal(ctx, errColl, logger),
-		SafeBrowsing: p.SafeBrowsing.toInternal(),
+		CustomFilter:   customConf,
+		CustomRuleList: p.CustomRuleLists.toInternal(ctx, errColl, logger),
+		Parental:       parental,
+		RuleList:       p.RuleLists.toInternal(ctx, errColl, logger),
+		SafeBrowsing:   p.SafeBrowsing.toInternal(),
 	}, nil
 }
 

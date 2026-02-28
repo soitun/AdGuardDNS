@@ -25,6 +25,7 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/querylog"
 	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/netutil"
+	"github.com/AdguardTeam/golibs/syncutil"
 	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/miekg/dns"
 	"github.com/prometheus/client_golang/prometheus"
@@ -75,7 +76,8 @@ func newTestService(
 
 	prof := &agd.Profile{
 		FilterConfig: &filter.ConfigClient{
-			Custom: &filter.ConfigCustom{},
+			CustomFilter:   &filter.ConfigCustomFilter{},
+			CustomRuleList: &filter.ConfigCustomRuleList{},
 			Parental: &filter.ConfigParental{
 				Categories: &filter.ConfigCategories{},
 			},
@@ -269,16 +271,17 @@ func newTestService(
 	require.NoError(t, err)
 
 	c := &dnssvc.Config{
-		BaseLogger:           testLogger,
-		Handlers:             handlers,
-		NewListener:          newTestListenerFunc(tl),
-		Cloner:               agdtest.NewCloner(),
-		ErrColl:              errColl,
-		NonDNS:               http.NotFoundHandler(),
-		PrometheusRegisterer: prometheus.NewRegistry(),
-		MetricsNamespace:     path.Base(t.Name()),
-		ServerGroups:         srvGrps,
-		HandleTimeout:        dnssvctest.Timeout,
+		BaseLogger:              testLogger,
+		Handlers:                handlers,
+		NewListener:             newTestListenerFunc(tl),
+		ActiveRequestsSemaphore: syncutil.EmptySemaphore{},
+		Cloner:                  agdtest.NewCloner(),
+		ErrColl:                 errColl,
+		NonDNS:                  http.NotFoundHandler(),
+		PrometheusRegisterer:    prometheus.NewRegistry(),
+		MetricsNamespace:        path.Base(t.Name()),
+		ServerGroups:            srvGrps,
+		HandleTimeout:           dnssvctest.Timeout,
 	}
 
 	svc, err = dnssvc.New(c)
@@ -366,7 +369,7 @@ func TestService_Wrap(t *testing.T) {
 		err := svc.Handle(ctx, dnssvctest.ServerGroupName, dnssvctest.ServerName, rw, req)
 		require.NoError(t, err)
 
-		resp := rw.Msg()
+		resp := rw.Resp()
 		dnsservertest.RequireResponse(t, req, resp, 1, dns.RcodeSuccess, false)
 
 		assert.Equal(t, dnssvctest.DeviceID, <-profileDBCh)
@@ -391,24 +394,20 @@ func TestService_Wrap(t *testing.T) {
 
 		cnameFQDN := dns.Fqdn(cname)
 
-		flt := &agdtest.Filter{
-			OnFilterRequest: func(
-				_ context.Context,
-				fltReq *filter.Request,
-			) (r filter.Result, err error) {
-				// Pretend a CNAME rewrite matched the request.
-				mod := dnsmsg.Clone(fltReq.DNS)
-				mod.Question[0].Name = cnameFQDN
+		flt := agdtest.NewFilter()
+		flt.OnFilterRequest = func(
+			_ context.Context,
+			fltReq *filter.Request,
+		) (r filter.Result, err error) {
+			// Pretend a CNAME rewrite matched the request.
+			mod := dnsmsg.Clone(fltReq.DNS)
+			mod.Question[0].Name = cnameFQDN
 
-				return &filter.ResultModifiedRequest{
-					Msg:  mod,
-					List: dnssvctest.FilterListID1,
-					Rule: cnameRule,
-				}, nil
-			},
-			OnFilterResponse: func(ctx context.Context, resp *filter.Response) (filter.Result, error) {
-				panic(testutil.UnexpectedCall(ctx, resp))
-			},
+			return &filter.ResultModifiedRequest{
+				Msg:  mod,
+				List: dnssvctest.FilterListID1,
+				Rule: cnameRule,
+			}, nil
 		}
 
 		svc, srvAddr := newTestService(
@@ -434,7 +433,7 @@ func TestService_Wrap(t *testing.T) {
 		err := svc.Handle(ctx, dnssvctest.ServerGroupName, dnssvctest.ServerName, rw, req)
 		require.NoError(t, err)
 
-		resp := rw.Msg()
+		resp := rw.Resp()
 		require.NotNil(t, resp)
 		require.Len(t, resp.Answer, 2)
 

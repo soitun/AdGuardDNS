@@ -1,6 +1,7 @@
 package filecacheopb
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -18,17 +19,20 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/fcpb"
 	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/errors"
+	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/c2h5oh/datasize"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // profilesToInternal converts protobuf profile structures into internal ones.
-// baseCustomLogger and cons must not be nil.
+// l, baseCustomLogger and cons must not be nil.
 //
 // TODO(f.setrakov): Do not rely on builders and reuse entities.
 func profilesToInternal(
+	ctx context.Context,
 	pbProfiles []*fcpb.Profile,
+	l *slog.Logger,
 	baseCustomLogger *slog.Logger,
 	cons *access.ProfileConstructor,
 	respSzEst datasize.ByteSize,
@@ -36,7 +40,7 @@ func profilesToInternal(
 	profiles = make([]*agd.Profile, 0, len(pbProfiles))
 	for i, pbProf := range pbProfiles {
 		var prof *agd.Profile
-		prof, err = profileToInternal(pbProf, baseCustomLogger, cons, respSzEst)
+		prof, err = profileToInternal(ctx, l, pbProf, baseCustomLogger, cons, respSzEst)
 		if err != nil {
 			return nil, fmt.Errorf("profile at index %d: %w", i, err)
 		}
@@ -48,13 +52,28 @@ func profilesToInternal(
 }
 
 // profileToInternal converts a protobuf profile structure to an internal one.
-// baseCustomLogger, cons and pbProfile must not be nil.
+// l, baseCustomLogger, cons and pbProfile must not be nil.
 func profileToInternal(
+	ctx context.Context,
+	l *slog.Logger,
 	pbProfile *fcpb.Profile,
 	baseCustomLogger *slog.Logger,
 	cons *access.ProfileConstructor,
 	respSzEst datasize.ByteSize,
 ) (prof *agd.Profile, err error) {
+	var accID agd.AccountID
+	accID, err = newAccountIDFromProtobuf(pbProfile)
+	if err != nil {
+		// For full compatibility with existing cache, do not fail profile
+		// parsing because of an invalid account ID.
+		l.WarnContext(
+			ctx,
+			"failed to parse account id, using default",
+			slogutil.KeyError, err,
+			"profile_id", pbProfile.GetProfileId(),
+		)
+	}
+
 	bmAdult, bmSafeBrowsing, bm, err := blockingModesToInternal(pbProfile)
 	if err != nil {
 		// Don't wrap the error, because it's informative enough as is.
@@ -83,7 +102,7 @@ func profileToInternal(
 		SafeBrowsingBlockingMode: bmSafeBrowsing,
 		Ratelimiter:              rateLimiterToInternal(pbProfile.GetRatelimiter(), respSzEst),
 
-		AccountID: agd.AccountID(pbProfile.GetAccountId()),
+		AccountID: accID,
 		ID:        agd.ProfileID(pbProfile.GetProfileId()),
 
 		// Consider device IDs to have been prevalidated.
@@ -102,7 +121,18 @@ func profileToInternal(
 		FilteringEnabled:    pbProfile.GetFilteringEnabled(),
 		IPLogEnabled:        pbProfile.GetIpLogEnabled(),
 		QueryLogEnabled:     pbProfile.GetQueryLogEnabled(),
+		QueryLogStream:      pbProfile.GetQueryLogStream(),
 	}, nil
+}
+
+// newAccountIDFromProtobuf extracts and validates account ID from protobuf
+// profile.  pbProf must not be nil.
+func newAccountIDFromProtobuf(pbProf *fcpb.Profile) (id agd.AccountID, err error) {
+	if pbProf.GetAccountIdInt() != 0 {
+		return agd.NewAccountID(pbProf.GetAccountIdInt())
+	}
+
+	return agd.NewAccountIDFromString(pbProf.GetAccountId())
 }
 
 // customDomainsToInternal converts profile's protobuf custom domains structures
@@ -152,9 +182,15 @@ func configClientToInternal(
 	ruleListIDs := pbFltConf.GetRuleList().GetIds()
 	safeBrowsing := pbFltConf.GetSafeBrowsing()
 	fltConf = &filter.ConfigClient{
-		Custom: &filter.ConfigCustom{
+		CustomFilter: &filter.ConfigCustomFilter{
 			Filter:  flt,
 			Enabled: pbFltConf.GetCustom().GetEnabled(),
+		},
+		CustomRuleList: &filter.ConfigCustomRuleList{ // Consider rule-list IDs to have been prevalidated.
+			IDs: agdprotobuf.UnsafelyConvertStrSlice[string, filter.ID](
+				pbFltConf.GetCustomRuleList().GetIds(),
+			),
+			Enabled: pbFltConf.GetCustomRuleList().GetEnabled(),
 		},
 		Parental: configParentalToInternal(pbFltConf, schedule),
 		RuleList: &filter.ConfigRuleList{
@@ -456,7 +492,7 @@ func customDomainConfigToInternal(
 
 	return &agd.CustomDomainConfig{
 		State:   state,
-		Domains: slices.Clone(pbCustomDomainConf.GetDomains()),
+		Domains: pbCustomDomainConf.GetDomains(),
 	}, nil
 }
 
@@ -522,16 +558,17 @@ func profileToProtobuf(p *agd.Profile) (pbProf *fcpb.Profile) {
 		}
 	}()
 
+	deviceIDs := p.DeviceIDs.Values()
+	slices.Sort(deviceIDs)
+
 	pbProfBuilder := &fcpb.Profile_builder{
-		CustomDomains: customDomainsToProtobuf(p.CustomDomains),
-		FilterConfig:  filterConfigToProtobuf(p.FilterConfig),
-		Access:        accessToProtobuf(p.Access.Config()),
-		Ratelimiter:   ratelimiterToProtobuf(p.Ratelimiter.Config()),
-		AccountId:     string(p.AccountID),
-		ProfileId:     string(p.ID),
-		DeviceIds: agdprotobuf.UnsafelyConvertStrSlice[agd.DeviceID, string](
-			p.DeviceIDs.Values(),
-		),
+		CustomDomains:       customDomainsToProtobuf(p.CustomDomains),
+		FilterConfig:        filterConfigToProtobuf(p.FilterConfig),
+		Access:              accessToProtobuf(p.Access.Config()),
+		Ratelimiter:         ratelimiterToProtobuf(p.Ratelimiter.Config()),
+		AccountIdInt:        int32(p.AccountID),
+		ProfileId:           string(p.ID),
+		DeviceIds:           agdprotobuf.UnsafelyConvertStrSlice[agd.DeviceID, string](deviceIDs),
 		FilteredResponseTtl: durationpb.New(p.FilteredResponseTTL),
 		AutoDevicesEnabled:  p.AutoDevicesEnabled,
 		BlockChromePrefetch: p.BlockChromePrefetch,
@@ -572,7 +609,7 @@ func customDomainConfigsToProtobuf(
 	pbConfs = make([]*fcpb.CustomDomainConfig, 0, l)
 	for i, c := range confs {
 		conf := fcpb.CustomDomainConfig_builder{
-			Domains: slices.Clone(c.Domains),
+			Domains: c.Domains,
 		}.Build()
 
 		switch s := c.State.(type) {
@@ -612,14 +649,14 @@ func customDomainConfigsToProtobuf(
 // must not be nil.
 func filterConfigToProtobuf(c *filter.ConfigClient) (fc *fcpb.FilterConfig) {
 	var rules []string
-	if c.Custom.Enabled {
-		filterRules := c.Custom.Filter.Rules()
+	if c.CustomFilter.Enabled {
+		filterRules := c.CustomFilter.Filter.Rules()
 		rules = agdprotobuf.UnsafelyConvertStrSlice[filter.RuleText, string](filterRules)
 	}
 
 	custom := fcpb.FilterConfig_Custom_builder{
 		Rules:   rules,
-		Enabled: c.Custom.Enabled,
+		Enabled: c.CustomFilter.Enabled,
 	}.Build()
 
 	categoryFilter := fcpb.FilterConfig_CategoryFilter_builder{
@@ -642,6 +679,11 @@ func filterConfigToProtobuf(c *filter.ConfigClient) (fc *fcpb.FilterConfig) {
 		SafeSearchYoutubeEnabled: c.Parental.SafeSearchYouTubeEnabled,
 	}.Build()
 
+	customRuleList := fcpb.FilterConfig_CustomRuleList_builder{
+		Ids:     agdprotobuf.UnsafelyConvertStrSlice[filter.ID, string](c.CustomRuleList.IDs),
+		Enabled: c.CustomRuleList.Enabled,
+	}.Build()
+
 	ruleList := fcpb.FilterConfig_RuleList_builder{
 		Ids:     agdprotobuf.UnsafelyConvertStrSlice[filter.ID, string](c.RuleList.IDs),
 		Enabled: c.RuleList.Enabled,
@@ -654,10 +696,11 @@ func filterConfigToProtobuf(c *filter.ConfigClient) (fc *fcpb.FilterConfig) {
 	}.Build()
 
 	return fcpb.FilterConfig_builder{
-		Custom:       custom,
-		Parental:     parental,
-		RuleList:     ruleList,
-		SafeBrowsing: safeBrowsing,
+		Custom:         custom,
+		CustomRuleList: customRuleList,
+		Parental:       parental,
+		RuleList:       ruleList,
+		SafeBrowsing:   safeBrowsing,
 	}.Build()
 }
 

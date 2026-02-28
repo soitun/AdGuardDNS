@@ -44,10 +44,6 @@ func (mw *Middleware) newRequestInfo(
 	ri.QType = q.Qtype
 	ri.QClass = q.Qclass
 
-	// As an optimization, put the request ID closer to the top of the context
-	// stack.
-	ri.ID, _ = agd.RequestIDFromContext(ctx)
-
 	// Add the profile information, if any.
 	localAddr := netutil.NetAddrToAddrPort(laddr)
 	ri.DeviceResult = mw.deviceFinder.Find(ctx, req, raddr, localAddr)

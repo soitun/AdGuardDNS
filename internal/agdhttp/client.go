@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/AdguardTeam/AdGuardDNS/internal/agd"
 	"github.com/AdguardTeam/golibs/httphdr"
+	"github.com/AdguardTeam/golibs/netutil/httputil"
 	"github.com/AdguardTeam/golibs/netutil/urlutil"
 )
 
@@ -27,9 +27,14 @@ type ClientConfig struct {
 
 // NewClient returns a new client.  c must not be nil.
 func NewClient(conf *ClientConfig) (c *Client) {
+	transport := httputil.NewRequestIDRoundTripper(&httputil.RequestIDRoundTripperConfig{
+		Transport: http.DefaultTransport.(*http.Transport).Clone(),
+	})
+
 	return &Client{
 		http: &http.Client{
-			Timeout: conf.Timeout,
+			Timeout:   conf.Timeout,
+			Transport: transport,
 		},
 		userAgent: UserAgent(),
 	}
@@ -84,11 +89,6 @@ func (c *Client) do(
 
 	if contentType != "" {
 		req.Header.Set(httphdr.ContentType, contentType)
-	}
-
-	reqID, ok := agd.RequestIDFromContext(ctx)
-	if ok {
-		req.Header.Set(httphdr.XRequestID, reqID.String())
 	}
 
 	req.Header.Set(httphdr.UserAgent, c.userAgent)

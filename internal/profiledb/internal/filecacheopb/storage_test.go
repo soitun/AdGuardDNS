@@ -3,6 +3,7 @@ package filecacheopb_test
 import (
 	"cmp"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,13 +13,14 @@ import (
 	"github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal"
 	"github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/filecacheopb"
 	"github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/profiledbtest"
+	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// newTestStorage returns new Storage and fills its config with given values.  If
-// conf is nil, default config will be used.
+// newTestStorage returns new Storage and fills its config with given values.
+// If conf is nil, default config will be used.
 func newTestStorage(tb testing.TB, conf *filecacheopb.Config) (storage *filecacheopb.Storage) {
 	tb.Helper()
 
@@ -99,6 +101,60 @@ func TestStorage_Load_BadVersion(t *testing.T) {
 	)
 }
 
+func TestStorage_Storage_Sort(t *testing.T) {
+	prof1, dev1 := profiledbtest.NewProfile(t)
+
+	prof2, dev2 := profiledbtest.NewProfile(t)
+	prof2.ID = "profile_2"
+	prof2.AccountID = 5678
+
+	dev2.ID = "device_2"
+	dev2.Name = "foo"
+
+	prof2.DeviceIDs = container.NewMapSet(dev2.ID)
+	prof1.DeviceIDs.Add(dev2.ID)
+
+	dir := t.TempDir()
+	syncTime := time.Now().Round(0).UTC()
+
+	fc1 := &internal.FileCache{
+		SyncTime: syncTime,
+		Profiles: []*agd.Profile{prof1, prof2},
+		Devices:  []*agd.Device{dev1, dev2},
+		Version:  internal.FileCacheVersion,
+	}
+
+	fc2 := &internal.FileCache{
+		SyncTime: syncTime,
+		Profiles: []*agd.Profile{prof2, prof1},
+		Devices:  []*agd.Device{dev2, dev1},
+		Version:  internal.FileCacheVersion,
+	}
+
+	data1 := storedData(t, filepath.Join(dir, "cache1.pb"), fc1)
+	data2 := storedData(t, filepath.Join(dir, "cache2.pb"), fc2)
+
+	assert.Equal(t, data1, data2)
+}
+
+// storedData saves the fileCache to the given path and returns the file's raw
+// content.  fileCache must not be nil.
+func storedData(tb testing.TB, path string, fileCache *internal.FileCache) (data []byte) {
+	tb.Helper()
+
+	storage := newTestStorage(tb, &filecacheopb.Config{CacheFilePath: path})
+
+	ctx := profiledbtest.ContextWithTimeout(tb)
+
+	_, err := storage.Store(ctx, fileCache)
+	require.NoError(tb, err)
+
+	data, err = os.ReadFile(path)
+	require.NoError(tb, err)
+
+	return data
+}
+
 func BenchmarkStorage(b *testing.B) {
 	prof, dev := profiledbtest.NewProfile(b)
 	s := newTestStorage(b, nil)
@@ -135,6 +191,6 @@ func BenchmarkStorage(b *testing.B) {
 	//	goarch: arm64
 	//	pkg: github.com/AdguardTeam/AdGuardDNS/internal/profiledb/internal/filecacheopb
 	//	cpu: Apple M3
-	//	BenchmarkStorage/load-8          	   34159	     35072 ns/op	   14280 B/op	     164 allocs/op
-	//	BenchmarkStorage/store-8         	     214	   5437664 ns/op	    6883 B/op	     107 allocs/op
+	//	BenchmarkStorage/load-8          	   33537	     35932 ns/op	   14376 B/op	     166 allocs/op
+	//	BenchmarkStorage/store-8         	     246	   4819773 ns/op	    6932 B/op	     106 allocs/op
 }
